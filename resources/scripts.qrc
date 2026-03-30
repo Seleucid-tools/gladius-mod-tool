@@ -1,0 +1,12 @@
+<RCC>
+  <qresource prefix="/scripts">
+    <file>scripts/bec-tool-all.py</file>
+    <file>scripts/gladiushashes.py</file>
+    <file>scripts/Gladius_Units_IDX_Repack.py</file>
+    <file>scripts/Gladius_Units_IDX_Unpack.py</file>
+    <file>scripts/ngciso-tool.py</file>
+    <file>scripts/tok-tool.py</file>
+    <file>scripts/Tok_Num_Update.py</file>
+    <file>scripts/Update_Strings_Bin.py</file>
+  </qresource>
+</RCC>

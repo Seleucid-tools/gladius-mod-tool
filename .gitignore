@@ -1,0 +1,22 @@
+# Build output
+build/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.ninja
+
+# dotnet build artifacts
+third_party/ps2isotool/bin/
+third_party/ps2isotool/obj/
+
+# OS
+"System Volume Information"/
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.user
