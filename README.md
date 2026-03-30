@@ -101,13 +101,22 @@ pacman -S \
 
 ### 3. Configure and build
 
+> **Important:** Always build from the **MSYS2 MinGW x64** shell (not from a
+> plain `cmd.exe`, PowerShell, or another terminal). If another MinGW
+> distribution (e.g. the one bundled with Git for Windows) is present on the
+> system PATH, GCC's internal helper `cc1.exe` can pick up the wrong DLL
+> versions and fail silently. The MSYS2 shell puts its own `mingw64/bin` first,
+> avoiding the conflict.
+
 ```bash
 cd gladius-mod-tool
 
-cmake -B build -G Ninja \
+# Build directory MUST be on a local drive (not a network/UNC share) so
+# that .NET's NuGet restore can write its package cache.
+cmake -B C:/build/gladius -G Ninja \
     -DCMAKE_BUILD_TYPE=Release
 
-cmake --build build
+cmake --build C:/build/gladius
 ```
 
 ### 4. Run

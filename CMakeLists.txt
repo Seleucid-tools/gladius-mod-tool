@@ -68,20 +68,56 @@ if(DOTNET_TOOL)
 
     # --self-contained + PublishSingleFile produces one standalone executable
     # with no separate .dll or runtime dependency.
-    add_custom_command(
-        OUTPUT  "${PS2_TOOL_BIN}"
-        COMMAND ${DOTNET_TOOL} publish "${PS2_TOOL_SRC}"
-                -c Release
-                --nologo
-                -r ${DOTNET_RID}
-                --self-contained true
-                -p:PublishSingleFile=true
-                -o "${PS2_TOOL_OUT}"
-        COMMENT "Building ps2isotool (C#/.NET self-contained, RID=${DOTNET_RID})"
-        DEPENDS "${PS2_TOOL_SRC}/Program.cs"
-                "${PS2_TOOL_SRC}/ps2isotool.csproj"
-        VERBATIM
-    )
+    if(WIN32)
+        # dotnet/NuGet cannot operate on UNC paths (\\server\share\...).
+        # Stage the project to a local directory at configure time so the build
+        # step only needs to run a single dotnet publish command on a local path.
+        set(PS2_TOOL_LOCAL "${CMAKE_BINARY_DIR}/ps2isotool-src")
+        file(COPY "${PS2_TOOL_SRC}/" DESTINATION "${PS2_TOOL_LOCAL}")
+        set(PS2_TOOL_BUILD_SRC "${PS2_TOOL_LOCAL}")
+    else()
+        set(PS2_TOOL_BUILD_SRC "${PS2_TOOL_SRC}")
+    endif()
+
+    if(WIN32)
+        # cmd.exe (Ninja's shell) loses USERPROFILE/APPDATA that NuGet requires.
+        # Write a .ps1 script at configure time and invoke it via PowerShell,
+        # which inherits the full user environment and works reliably.
+        find_program(POWERSHELL_EXE powershell
+            HINTS "C:/Windows/System32/WindowsPowerShell/v1.0")
+        if(NOT POWERSHELL_EXE)
+            set(POWERSHELL_EXE powershell)
+        endif()
+        set(_ps1 "${CMAKE_BINARY_DIR}/build_ps2isotool.ps1")
+        # Convert the binary dir to a Windows-native path for MSBuild properties
+        file(TO_NATIVE_PATH "${CMAKE_BINARY_DIR}" _cmake_binary_dir_native)
+        # IMPORTANT: use \n (LF-only) line endings.  PowerShell backtick line
+        # continuation breaks silently when the file has CRLF endings because
+        # the \r before \n is NOT treated as whitespace by the tokenizer.
+        # Writing the script as a single logical line with semicolons avoids the
+        # issue entirely — no line continuations needed.
+        file(WRITE "${_ps1}"
+"# Pin NuGet packages cache to a local dir so NuGet never resolves paths\n# through the UNC share (VBoxSvr / network).\n\$env:NUGET_PACKAGES = '${_cmake_binary_dir_native}\\nuget-packages'\n& '${DOTNET_TOOL}' publish '${PS2_TOOL_BUILD_SRC}' -c Release --nologo -r ${DOTNET_RID} --self-contained true '-p:PublishSingleFile=true' -o '${PS2_TOOL_OUT}'\nexit \$LASTEXITCODE\n")
+        add_custom_command(
+            OUTPUT  "${PS2_TOOL_BIN}"
+            COMMAND "${POWERSHELL_EXE}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${_ps1}"
+            COMMENT "Building ps2isotool (C#/.NET self-contained, RID=${DOTNET_RID})"
+            DEPENDS "${PS2_TOOL_SRC}/Program.cs"
+                    "${PS2_TOOL_SRC}/ps2isotool.csproj"
+            VERBATIM
+        )
+    else()
+        add_custom_command(
+            OUTPUT  "${PS2_TOOL_BIN}"
+            COMMAND ${DOTNET_TOOL} publish "${PS2_TOOL_BUILD_SRC}"
+                    -c Release --nologo -r ${DOTNET_RID} --self-contained true
+                    -p:PublishSingleFile=true -o "${PS2_TOOL_OUT}"
+            COMMENT "Building ps2isotool (C#/.NET self-contained, RID=${DOTNET_RID})"
+            DEPENDS "${PS2_TOOL_SRC}/Program.cs"
+                    "${PS2_TOOL_SRC}/ps2isotool.csproj"
+            VERBATIM
+        )
+    endif()
     add_custom_target(ps2isotool-build DEPENDS "${PS2_TOOL_BIN}")
 else()
     message(WARNING
