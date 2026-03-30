@@ -363,10 +363,9 @@ void PipelineTab::startNextStep()
             m_log->appendOutput(">> ps2isotool extract " + isoPath + " " + dst);
             emit ps2Extract(isoPath, dst);
         } else {
-            // Xbox: extract-xiso <iso>  (QProcess-based)
-            // Remove any leftover intermediate dir from a previous run so
-            // extract-xiso doesn't fail on pre-existing files.
-            QString xisoOut = m_workDir + "/" + m_isoName;
+            // Xbox: extract-xiso creates <isoDir>/<isoName>/ next to the ISO.
+            // Remove it if it already exists so re-runs don't fail.
+            QString xisoOut = QFileInfo(isoPath).absolutePath() + "/" + m_isoName;
             if (QDir(xisoOut).exists())
                 QDir(xisoOut).removeRecursively();
             m_log->appendOutput(">> extract-xiso " + isoPath);
@@ -523,10 +522,10 @@ void PipelineTab::onScriptFinished(bool success)
     // Advance state machine
     switch (m_step) {
     case Step::UnpackIso: {
-        // Xbox: extract-xiso creates <workDir>/<isoName>/ — rename to "<isoName> extracted iso/"
+        // Xbox: extract-xiso creates <isoDir>/<isoName>/ next to the ISO — move to "<workDir>/<isoName> extracted iso/"
         // GC/PS2: output already goes directly to extractedIsoDir(), no rename needed.
         if (m_platform == Platform::Xbox) {
-            QString src = m_workDir + "/" + m_isoName;
+            QString src = QFileInfo(m_isoPathEdit->text().trimmed()).absolutePath() + "/" + m_isoName;
             QString dst = extractedIsoDir();
             dst.chop(1); // remove trailing slash for rename
 
