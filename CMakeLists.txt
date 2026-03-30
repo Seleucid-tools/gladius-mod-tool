@@ -217,8 +217,8 @@ if(WIN32)
             "  windeployqt --no-translations gladius-mod-tool.exe")
     endif()
 
-    # Copy the Python runtime DLL (e.g. python312.dll) next to the exe so the
-    # app runs without a system-wide Python installation on the target machine.
+    # Copy the Python runtime DLL (e.g. libpython3.14.dll) next to the exe so
+    # the app runs without a system-wide Python installation on the target machine.
     if(Python3_RUNTIME_LIBRARY)
         add_custom_command(TARGET gladius-mod-tool POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -230,6 +230,30 @@ if(WIN32)
         message(WARNING
             "Python3_RUNTIME_LIBRARY not set — Python DLL will not be copied automatically.\n"
             "Copy python3XX.dll manually next to the exe for self-contained deployment.")
+    endif()
+
+    # Bundle the Python standard library for fully self-contained deployment.
+    # PythonRunner sets config.home = appDir/python at startup when that
+    # directory exists; Python then resolves stdlib at python/lib/pythonX.Y/.
+    # The helper script strips large unused subtrees (test suite, pycache, idle,
+    # tkinter, ensurepip) shrinking the stdlib from ~220 MB down to ~35 MB.
+    if(Python3_STDLIB AND EXISTS "${Python3_STDLIB}")
+        set(PY_LIB_DEST
+            "$<TARGET_FILE_DIR:gladius-mod-tool>/python/lib/python${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR}")
+        message(STATUS "Python stdlib to bundle: ${Python3_STDLIB} → python/lib/python${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR}/")
+        add_custom_command(TARGET gladius-mod-tool POST_BUILD
+            COMMAND ${CMAKE_COMMAND}
+                "-DPY_STDLIB_SRC=${Python3_STDLIB}"
+                "-DPY_STDLIB_DST=${PY_LIB_DEST}"
+                -P "${CMAKE_SOURCE_DIR}/cmake/bundle_python_stdlib.cmake"
+            COMMENT "Bundling Python ${Python3_VERSION} stdlib (stripped) → python/lib/python${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR}/"
+        )
+    else()
+        message(WARNING
+            "Python3_STDLIB not found — stdlib will not be bundled automatically.\n"
+            "Copy the Python ${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR} stdlib to "
+            "python/lib/python${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR}/ "
+            "next to the exe for self-contained deployment.")
     endif()
 endif()
 

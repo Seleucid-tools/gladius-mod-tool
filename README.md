@@ -120,31 +120,23 @@ Or double-click `gladius-mod-tool.exe` in Explorer.
 
 ### What the build copies automatically
 
-After a successful build the output directory contains:
+After a successful build the output directory is fully self-contained:
 
-| File | Source |
-|------|--------|
+| Path | Contents |
+|------|----------|
 | `gladius-mod-tool.exe` | C++ application |
 | `extract-xiso.exe` | Bundled, compiled from source |
 | `ps2isotool.exe` | .NET self-contained (if `dotnet` is found) |
-| Qt DLLs + plugins | Copied by `windeployqt` |
-| `python3XX.dll` | Copied from the MSYS2 Python installation |
+| `Qt6*.dll`, `platforms/`, `styles/`, … | Qt runtime (via `windeployqt`) |
+| `libpython3.XX.dll` | Python runtime DLL |
+| `python/lib/python3.XX/` | Python standard library (~35 MB stripped) |
 
-### Self-contained deployment (no Python install required on target)
+The build strips the test suite, `__pycache__`, `idlelib`, `tkinter`,
+`ensurepip`, and `site-packages` from the stdlib copy — reducing it from
+~220 MB down to ~35 MB while keeping everything the modding scripts need.
 
-The app reads Python scripts it has embedded at build time. On the build
-machine the Python standard library is found automatically. To distribute to a
-machine **without Python installed**, bundle the embeddable Python package:
-
-1. Download the **Windows embeddable package** for the same Python version used
-   to build (e.g. `python-3.12.x-embed-amd64.zip`) from
-   <https://www.python.org/downloads/windows/>.
-2. Extract the zip into a folder named `python/` next to `gladius-mod-tool.exe`.
-3. The app detects the `python/` directory at startup and configures its
-   embedded interpreter to use it — no registry entries or `PATH` changes are
-   needed.
-
-The resulting portable folder can be zipped and distributed as-is.
+The resulting folder can be zipped and distributed to machines that have no
+Python or Qt installed.
 
 ### MSVC build (advanced)
 
