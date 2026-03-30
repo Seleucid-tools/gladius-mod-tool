@@ -64,11 +64,13 @@ void XisoRunner::startProcess(const QStringList &args, const QString &workingDir
 void XisoRunner::unpack(const QString &isoPath, const QString &workingDir)
 {
     // extract-xiso <iso>  → creates <isobasename>/ directory
-    startProcess({isoPath}, workingDir);
+    // Use native separators: extract-xiso on Windows doesn't handle
+    // forward-slash absolute paths (strips drive letter, treats as relative).
+    startProcess({QDir::toNativeSeparators(isoPath)}, workingDir);
 }
 
 void XisoRunner::repack(const QString &dirPath, const QString &workingDir)
 {
     // extract-xiso -c <dir>  → creates <dir>.iso
-    startProcess({"-c", dirPath}, workingDir);
+    startProcess({"-c", QDir::toNativeSeparators(dirPath)}, workingDir);
 }
