@@ -8,8 +8,12 @@ Ps2IsoRunner::Ps2IsoRunner(QObject *parent)
 
 QString Ps2IsoRunner::binaryPath()
 {
-    QString appDir   = QCoreApplication::applicationDirPath();
+    QString appDir = QCoreApplication::applicationDirPath();
+#ifdef _WIN32
+    QString candidate = appDir + "/ps2isotool.exe";
+#else
     QString candidate = appDir + "/ps2isotool";
+#endif
     if (QFileInfo::exists(candidate))
         return candidate;
     return {};

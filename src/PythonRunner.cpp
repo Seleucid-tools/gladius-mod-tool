@@ -10,7 +10,13 @@
 // because we haven't included any Qt header yet.  Python.h itself doesn't
 // define `slots`.  Qt will define it when QObject is included below.
 #include "PythonRunner.h"
+#include <QCoreApplication>
 #include <QDebug>
+#include <QDir>
+
+#ifdef _WIN32
+#include <string>
+#endif
 
 // ── GIL state ─────────────────────────────────────────────────────────────────
 // After Py_Initialize(), the main thread holds the GIL.  We immediately save
@@ -78,6 +84,22 @@ PythonRunner::~PythonRunner() = default;
 bool PythonRunner::init()
 {
     if (s_initialized) return true;
+
+#ifdef _WIN32
+    // For self-contained Windows deployment: if a "python" directory sits next
+    // to the exe (populated with the Windows embeddable Python package), point
+    // the interpreter there so the standard library is loaded from our bundled
+    // copy rather than requiring a system-wide Python installation.
+    // Py_SetPythonHome must be called before Py_Initialize, and the wchar_t*
+    // must remain valid for the lifetime of the process, hence the static.
+    {
+        QString localHome = QCoreApplication::applicationDirPath() + "/python";
+        if (QDir(localHome).exists()) {
+            static std::wstring s_pyHome = localHome.toStdWString();
+            Py_SetPythonHome(s_pyHome.c_str());
+        }
+    }
+#endif
 
     Py_Initialize();
     if (!Py_IsInitialized()) {

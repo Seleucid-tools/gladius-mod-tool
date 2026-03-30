@@ -19,6 +19,9 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Embed)
 message(STATUS "Python3 embed libs: ${Python3_LIBRARIES}")
 message(STATUS "Python3 include:    ${Python3_INCLUDE_DIRS}")
+if(Python3_RUNTIME_LIBRARY)
+    message(STATUS "Python3 runtime DLL: ${Python3_RUNTIME_LIBRARY}")
+endif()
 
 # ── extract-xiso (bundled source) ────────────────────────────────────────────
 set(XISO_SRC_DIR "${CMAKE_SOURCE_DIR}/third_party/extract-xiso")
@@ -56,7 +59,12 @@ if(DOTNET_TOOL)
 
     set(PS2_TOOL_SRC "${CMAKE_SOURCE_DIR}/third_party/ps2isotool")
     set(PS2_TOOL_OUT "${CMAKE_BINARY_DIR}/ps2isotool-publish")
-    set(PS2_TOOL_BIN "${PS2_TOOL_OUT}/ps2isotool")
+    # On Windows the published .NET single-file binary gets an .exe extension
+    if(WIN32)
+        set(PS2_TOOL_BIN "${PS2_TOOL_OUT}/ps2isotool.exe")
+    else()
+        set(PS2_TOOL_BIN "${PS2_TOOL_OUT}/ps2isotool")
+    endif()
 
     # --self-contained + PublishSingleFile produces one standalone executable
     # with no separate .dll or runtime dependency.
@@ -80,7 +88,7 @@ else()
         "dotnet SDK not found — ps2isotool will not be built automatically. "
         "PS2 ISO operations will be unavailable until ps2isotool is placed next to the app. "
         "Build manually: cd third_party/ps2isotool && "
-        "dotnet publish -c Release -r linux-x64 --self-contained true "
+        "dotnet publish -c Release -r <RID> --self-contained true "
         "-p:PublishSingleFile=true -o <builddir>/ps2isotool-publish")
 endif()
 
@@ -117,6 +125,12 @@ set(SOURCES
 
 qt_add_executable(gladius-mod-tool ${SOURCES})
 
+# On Windows, set the GUI subsystem so no console window appears at launch.
+# This is a no-op on other platforms.
+if(WIN32)
+    set_target_properties(gladius-mod-tool PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
+
 # ── Qt resources ──────────────────────────────────────────────────────────────
 qt_add_resources(gladius-mod-tool "scripts"
     PREFIX "/scripts"
@@ -144,18 +158,23 @@ target_link_libraries(gladius-mod-tool PRIVATE
     ${Python3_LIBRARIES}
 )
 
-# ── Python 3.14+ / Qt header ordering warning suppression ────────────────────
+# ── Compiler options — suppress warnings from Python/Qt header ordering ───────
+# -Wno-builtin-macro-redefined: Python 3.14+ object.h 'slots' struct member
+# collides with Qt's 'slots' empty macro.  GCC/Clang only; MSVC does not
+# recognise this flag.
 target_compile_options(gladius-mod-tool PRIVATE
-    -Wno-builtin-macro-redefined
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wno-builtin-macro-redefined>
 )
 
 # ── Copy extract-xiso next to the app after build ────────────────────────────
+# Use $<TARGET_FILE_NAME:...> so the destination preserves the correct filename
+# on every platform (extract-xiso on Linux/macOS, extract-xiso.exe on Windows).
 if(XISO_TARGET)
     add_dependencies(gladius-mod-tool ${XISO_TARGET})
     add_custom_command(TARGET gladius-mod-tool POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             $<TARGET_FILE:${XISO_TARGET}>
-            $<TARGET_FILE_DIR:gladius-mod-tool>/extract-xiso
+            $<TARGET_FILE_DIR:gladius-mod-tool>/$<TARGET_FILE_NAME:${XISO_TARGET}>
         COMMENT "Copying extract-xiso binary alongside app"
     )
 endif()
@@ -164,14 +183,54 @@ endif()
 # Use an ALL custom target (not POST_BUILD) so the copy runs whenever
 # ps2isotool-build updates the binary, independent of the C++ link step.
 if(DOTNET_TOOL)
+    get_filename_component(PS2_TOOL_BIN_NAME "${PS2_TOOL_BIN}" NAME)
     add_custom_target(copy-ps2isotool ALL
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${PS2_TOOL_BIN}"
-            "${CMAKE_BINARY_DIR}/ps2isotool"
+            "$<TARGET_FILE_DIR:gladius-mod-tool>/${PS2_TOOL_BIN_NAME}"
         DEPENDS ps2isotool-build
         COMMENT "Copying ps2isotool to build directory"
     )
     add_dependencies(gladius-mod-tool copy-ps2isotool)
+endif()
+
+# ── Windows self-contained deployment ────────────────────────────────────────
+if(WIN32)
+    # windeployqt scans the exe and copies all required Qt DLLs and plugins
+    # into the output directory, producing a portable deployment folder.
+    find_program(WINDEPLOYQT_TOOL windeployqt
+        HINTS "${Qt6_DIR}/../../../bin"
+    )
+    if(WINDEPLOYQT_TOOL)
+        message(STATUS "windeployqt: ${WINDEPLOYQT_TOOL}")
+        add_custom_command(TARGET gladius-mod-tool POST_BUILD
+            COMMAND "${WINDEPLOYQT_TOOL}"
+                --no-translations
+                --no-system-d3d-compiler
+                "$<TARGET_FILE:gladius-mod-tool>"
+            COMMENT "Running windeployqt to bundle Qt DLLs"
+        )
+    else()
+        message(WARNING
+            "windeployqt not found — Qt DLLs will not be copied automatically.\n"
+            "Add <Qt install>/bin to PATH and reconfigure, or run windeployqt manually:\n"
+            "  windeployqt --no-translations gladius-mod-tool.exe")
+    endif()
+
+    # Copy the Python runtime DLL (e.g. python312.dll) next to the exe so the
+    # app runs without a system-wide Python installation on the target machine.
+    if(Python3_RUNTIME_LIBRARY)
+        add_custom_command(TARGET gladius-mod-tool POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${Python3_RUNTIME_LIBRARY}"
+                "$<TARGET_FILE_DIR:gladius-mod-tool>"
+            COMMENT "Copying Python runtime DLL alongside app"
+        )
+    else()
+        message(WARNING
+            "Python3_RUNTIME_LIBRARY not set — Python DLL will not be copied automatically.\n"
+            "Copy python3XX.dll manually next to the exe for self-contained deployment.")
+    endif()
 endif()
 
 # ── Install ───────────────────────────────────────────────────────────────────

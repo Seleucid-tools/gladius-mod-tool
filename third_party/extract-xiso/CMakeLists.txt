@@ -16,7 +16,8 @@ target_compile_definitions(extract-xiso PRIVATE ${_XISO_PLATFORM_DEFINE})
 # Suppress two benign warnings in this legacy C code:
 #   -Wint-to-pointer-cast  (avl_traverse callback cast, line 1729)
 #   -Wunused-result        (chdir return value ignored, line 1179)
+# These are GCC/Clang flags; MSVC does not recognise them.
 target_compile_options(extract-xiso PRIVATE
-    -Wno-int-to-pointer-cast
-    -Wno-unused-result
+    $<$<NOT:$<C_COMPILER_ID:MSVC>>:-Wno-int-to-pointer-cast>
+    $<$<NOT:$<C_COMPILER_ID:MSVC>>:-Wno-unused-result>
 )

@@ -11,7 +11,11 @@ QString XisoRunner::binaryPath()
 {
     // Look next to the application executable first.
     QString appDir = QCoreApplication::applicationDirPath();
+#ifdef _WIN32
+    QString candidate = appDir + "/extract-xiso.exe";
+#else
     QString candidate = appDir + "/extract-xiso";
+#endif
     if (QFileInfo::exists(candidate))
         return candidate;
 

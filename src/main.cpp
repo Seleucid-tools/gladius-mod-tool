@@ -16,7 +16,7 @@ int main(int argc, char *argv[])
     if (!ScriptExtractor::extractAll()) {
         QMessageBox::critical(nullptr, "Startup error",
             "Failed to extract bundled Python scripts.\n"
-            "Check that /tmp is writable.");
+            "Check that the system temporary directory is writable.");
         return 1;
     }
 

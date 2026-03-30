@@ -1,9 +1,20 @@
 # Gladius Mod Tool
 
-A native Linux Qt6 GUI for the Gladius modding toolkit. Supports Gamecube and
-Xbox ISO unpacking/repacking with an integrated file editor. No Wine required.
+A Qt6 GUI for the Gladius modding toolkit. Supports Gamecube and Xbox ISO
+unpacking/repacking with an integrated file editor. Runs natively on Linux and
+Windows — no Wine required.
 
 ## Requirements
+
+### extract-xiso (bundled)
+
+`extract-xiso` v2.7.1 (XboxDev/extract-xiso, BSD-style licence) is bundled
+under `third_party/extract-xiso/` and compiled automatically — no separate
+download required. After build, CMake copies the binary next to the app.
+
+---
+
+## Building on Linux
 
 ### System packages (Arch Linux)
 
@@ -20,15 +31,7 @@ sudo pacman -S \
 `python` pulls in the CPython embed headers and shared library that CMake will
 find via `find_package(Python3 ... Development.Embed)`.
 
-### extract-xiso (bundled)
-
-`extract-xiso` v2.7.1 (XboxDev/extract-xiso, BSD-style licence) is bundled
-under `third_party/extract-xiso/` and compiled automatically — no separate
-download required. After build, CMake copies the binary next to the app.
-
----
-
-## Building
+### Configure and build
 
 ```bash
 # 1. Clone / place the project
@@ -69,6 +72,98 @@ or a venv) is installed:
 ```bash
 pacman -Qs python | grep "^local/python "
 # Should show: local/python 3.XX.X-X
+```
+
+---
+
+## Building on Windows
+
+The recommended toolchain is **MSYS2 with MinGW-w64**. It provides a
+Linux-like shell, a up-to-date GCC/Clang, and pre-built Qt6/Python packages
+that CMake can find automatically.
+
+### 1. Install MSYS2
+
+Download and run the installer from <https://www.msys2.org/>, then open the
+**MSYS2 MinGW x64** shell.
+
+### 2. Install dependencies
+
+```bash
+pacman -S \
+    mingw-w64-x86_64-qt6-base \
+    mingw-w64-x86_64-python \
+    mingw-w64-x86_64-cmake \
+    mingw-w64-x86_64-ninja \
+    mingw-w64-x86_64-gcc \
+    git
+```
+
+### 3. Configure and build
+
+```bash
+cd gladius-mod-tool
+
+cmake -B build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release
+
+cmake --build build
+```
+
+### 4. Run
+
+```bash
+./build/gladius-mod-tool.exe
+```
+
+Or double-click `gladius-mod-tool.exe` in Explorer.
+
+### What the build copies automatically
+
+After a successful build the output directory contains:
+
+| File | Source |
+|------|--------|
+| `gladius-mod-tool.exe` | C++ application |
+| `extract-xiso.exe` | Bundled, compiled from source |
+| `ps2isotool.exe` | .NET self-contained (if `dotnet` is found) |
+| Qt DLLs + plugins | Copied by `windeployqt` |
+| `python3XX.dll` | Copied from the MSYS2 Python installation |
+
+### Self-contained deployment (no Python install required on target)
+
+The app reads Python scripts it has embedded at build time. On the build
+machine the Python standard library is found automatically. To distribute to a
+machine **without Python installed**, bundle the embeddable Python package:
+
+1. Download the **Windows embeddable package** for the same Python version used
+   to build (e.g. `python-3.12.x-embed-amd64.zip`) from
+   <https://www.python.org/downloads/windows/>.
+2. Extract the zip into a folder named `python/` next to `gladius-mod-tool.exe`.
+3. The app detects the `python/` directory at startup and configures its
+   embedded interpreter to use it — no registry entries or `PATH` changes are
+   needed.
+
+The resulting portable folder can be zipped and distributed as-is.
+
+### MSVC build (advanced)
+
+Building with Visual Studio is possible but not the primary supported path.
+You will need:
+
+- Visual Studio 2022 with the **Desktop development with C++** workload
+- Qt6 installed via the Qt online installer (select the MSVC 64-bit component)
+- Python 3.x from <https://www.python.org/> (select "Add to PATH" and install
+  the debug symbols/libraries component)
+- CMake ≥ 3.22 and Ninja (bundled with Visual Studio, or from cmake.org)
+
+Open a **Developer Command Prompt for VS 2022**, then:
+
+```cmd
+cmake -B build -G Ninja ^
+    -DCMAKE_BUILD_TYPE=Release ^
+    -DCMAKE_PREFIX_PATH=C:\Qt\6.x.x\msvc2022_64
+cmake --build build
 ```
 
 ---
