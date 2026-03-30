@@ -217,20 +217,20 @@ if(WIN32)
             "  windeployqt --no-translations gladius-mod-tool.exe")
     endif()
 
-    # Copy MinGW GCC runtime DLLs — windeployqt handles Qt but not the compiler
-    # runtime.  These three DLLs live in the same directory as the compiler.
+    # Copy all MinGW runtime DLLs the exe depends on.  windeployqt handles Qt
+    # but not the compiler runtime (libgcc, libstdc++, libwinpthread, ICU, …).
+    # The helper script uses file(GET_RUNTIME_DEPENDENCIES) to resolve the full
+    # dependency tree and copies every DLL that lives inside the MinGW tree.
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         get_filename_component(MINGW_BIN "${CMAKE_CXX_COMPILER}" DIRECTORY)
-        foreach(_dll libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll)
-            if(EXISTS "${MINGW_BIN}/${_dll}")
-                add_custom_command(TARGET gladius-mod-tool POST_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                        "${MINGW_BIN}/${_dll}"
-                        "$<TARGET_FILE_DIR:gladius-mod-tool>"
-                    COMMENT "Copying MinGW runtime: ${_dll}"
-                )
-            endif()
-        endforeach()
+        add_custom_command(TARGET gladius-mod-tool POST_BUILD
+            COMMAND ${CMAKE_COMMAND}
+                "-DAPP_EXE=$<TARGET_FILE:gladius-mod-tool>"
+                "-DMINGW_BIN=${MINGW_BIN}"
+                "-DOUTPUT_DIR=$<TARGET_FILE_DIR:gladius-mod-tool>"
+                -P "${CMAKE_SOURCE_DIR}/cmake/copy_mingw_deps.cmake"
+            COMMENT "Copying MinGW runtime DLLs"
+        )
     endif()
 
     # Copy the Python runtime DLL (e.g. libpython3.14.dll) next to the exe so
