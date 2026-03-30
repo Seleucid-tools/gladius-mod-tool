@@ -90,13 +90,22 @@ bool PythonRunner::init()
     // to the exe (populated with the Windows embeddable Python package), point
     // the interpreter there so the standard library is loaded from our bundled
     // copy rather than requiring a system-wide Python installation.
-    // Py_SetPythonHome must be called before Py_Initialize, and the wchar_t*
-    // must remain valid for the lifetime of the process, hence the static.
+    // Uses PyConfig (Python 3.8+) rather than the deprecated Py_SetPythonHome.
     {
         QString localHome = QCoreApplication::applicationDirPath() + "/python";
         if (QDir(localHome).exists()) {
-            static std::wstring s_pyHome = localHome.toStdWString();
-            Py_SetPythonHome(s_pyHome.c_str());
+            std::wstring wHome = localHome.toStdWString();
+            PyConfig config;
+            PyConfig_InitPythonConfig(&config);
+            PyConfig_SetString(&config, &config.home, wHome.c_str());
+            PyStatus st = Py_InitializeFromConfig(&config);
+            PyConfig_Clear(&config);
+            if (PyStatus_Exception(st)) {
+                qWarning() << "PythonRunner: Py_InitializeFromConfig failed";
+                return false;
+            }
+            // Interpreter is already running — skip the plain Py_Initialize below
+            goto python_ready;
         }
     }
 #endif
@@ -106,6 +115,8 @@ bool PythonRunner::init()
         qWarning() << "PythonRunner: Py_Initialize failed";
         return false;
     }
+
+python_ready:
 
     // Build our stream type while we still hold the GIL (main thread)
     g_QtStreamType = PyType_FromSpec(&qtstream_spec);
