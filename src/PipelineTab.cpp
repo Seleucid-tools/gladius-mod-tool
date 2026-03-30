@@ -364,6 +364,11 @@ void PipelineTab::startNextStep()
             emit ps2Extract(isoPath, dst);
         } else {
             // Xbox: extract-xiso <iso>  (QProcess-based)
+            // Remove any leftover intermediate dir from a previous run so
+            // extract-xiso doesn't fail on pre-existing files.
+            QString xisoOut = m_workDir + "/" + m_isoName;
+            if (QDir(xisoOut).exists())
+                QDir(xisoOut).removeRecursively();
             m_log->appendOutput(">> extract-xiso " + isoPath);
             emit xisoUnpack(isoPath, m_workDir);
         }
