@@ -217,6 +217,22 @@ if(WIN32)
             "  windeployqt --no-translations gladius-mod-tool.exe")
     endif()
 
+    # Copy MinGW GCC runtime DLLs — windeployqt handles Qt but not the compiler
+    # runtime.  These three DLLs live in the same directory as the compiler.
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        get_filename_component(MINGW_BIN "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        foreach(_dll libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll)
+            if(EXISTS "${MINGW_BIN}/${_dll}")
+                add_custom_command(TARGET gladius-mod-tool POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${MINGW_BIN}/${_dll}"
+                        "$<TARGET_FILE_DIR:gladius-mod-tool>"
+                    COMMENT "Copying MinGW runtime: ${_dll}"
+                )
+            endif()
+        endforeach()
+    endif()
+
     # Copy the Python runtime DLL (e.g. libpython3.14.dll) next to the exe so
     # the app runs without a system-wide Python installation on the target machine.
     if(Python3_RUNTIME_LIBRARY)
