@@ -45,16 +45,21 @@ MainWindow::MainWindow(QWidget *parent)
     m_platformTabs->addTab(m_editorTab, "File editor");
     m_platformTabs->addTab(m_schoolTab, "School Builder");
 
+    // School builder follows the editor's working directory (pipeline or manual browse)
+    connect(m_editorTab, &EditorTab::workingDirChanged,
+            m_schoolTab, &SchoolBuilderTab::setRootPath);
+    connect(m_editorTab, &EditorTab::workingDirChanged,
+            this, [this](const QString &moddedDir, const QString &vanillaDir) {
+        m_lastModdedDir  = moddedDir;
+        m_lastVanillaDir = vanillaDir;
+    });
+
     // When either pipeline finishes an unpack, populate editor and switch to it
     auto wireUnpack = [this](PipelineTab *tab) {
         connect(tab, &PipelineTab::unpackComplete,
                 m_editorTab, &EditorTab::setRootPath);
         connect(tab, &PipelineTab::unpackComplete,
-                m_schoolTab, &SchoolBuilderTab::setRootPath);
-        connect(tab, &PipelineTab::unpackComplete,
-                this, [this](const QString &moddedDir, const QString &vanillaDir) {
-            m_lastModdedDir  = moddedDir;
-            m_lastVanillaDir = vanillaDir;
+                this, [this](const QString &, const QString &) {
             m_platformTabs->setCurrentWidget(m_editorTab);
         });
     };
@@ -140,8 +145,8 @@ void MainWindow::restoreSettings()
     m_lastVanillaDir = s.value("editor/vanillaDir").toString();
 
     if (!m_lastModdedDir.isEmpty() && QDir(m_lastModdedDir).exists()) {
+        // setRootPath emits workingDirChanged, which wires school builder automatically
         m_editorTab->setRootPath(m_lastModdedDir, m_lastVanillaDir);
-        m_schoolTab->setRootPath(m_lastModdedDir, m_lastVanillaDir);
     }
 }
 

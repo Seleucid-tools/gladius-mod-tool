@@ -15,13 +15,8 @@ set(CMAKE_AUTOUIC OFF)
 # ── Qt6 ──────────────────────────────────────────────────────────────────────
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 
-# ── Python3 (embed) ───────────────────────────────────────────────────────────
-find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Embed)
-message(STATUS "Python3 embed libs: ${Python3_LIBRARIES}")
-message(STATUS "Python3 include:    ${Python3_INCLUDE_DIRS}")
-if(Python3_RUNTIME_LIBRARY)
-    message(STATUS "Python3 runtime DLL: ${Python3_RUNTIME_LIBRARY}")
-endif()
+# ── zlib (for BecTool compression) ───────────────────────────────────────────
+find_package(ZLIB REQUIRED)
 
 # ── extract-xiso (bundled source) ────────────────────────────────────────────
 set(XISO_SRC_DIR "${CMAKE_SOURCE_DIR}/third_party/extract-xiso")
@@ -138,7 +133,7 @@ qt_wrap_cpp(MOC_SOURCES
     src/PipelineTab.h
     src/EditorTab.h
     src/SchoolBuilderTab.h
-    src/PythonRunner.h
+    src/NativeRunner.h
     src/XisoRunner.h
     src/Ps2IsoRunner.h
     src/LogPanel.h
@@ -151,11 +146,18 @@ set(SOURCES
     src/PipelineTab.cpp
     src/EditorTab.cpp
     src/SchoolBuilderTab.cpp
-    src/PythonRunner.cpp
+    src/NativeRunner.cpp
     src/XisoRunner.cpp
     src/Ps2IsoRunner.cpp
     src/LogPanel.cpp
-    src/ScriptExtractor.cpp
+    src/tools/GladiusHashes.cpp
+    src/tools/TokNumUpdate.cpp
+    src/tools/UpdateStringsBin.cpp
+    src/tools/TokTool.cpp
+    src/tools/GladiusIdxUnpack.cpp
+    src/tools/GladiusIdxRepack.cpp
+    src/tools/NgcIsoTool.cpp
+    src/tools/BecTool.cpp
     ${MOC_SOURCES}
 )
 
@@ -167,39 +169,22 @@ if(WIN32)
     set_target_properties(gladius-mod-tool PROPERTIES WIN32_EXECUTABLE TRUE)
 endif()
 
-# ── Qt resources ──────────────────────────────────────────────────────────────
-qt_add_resources(gladius-mod-tool "scripts"
-    PREFIX "/scripts"
-    BASE   "resources/scripts"
-    FILES
-        resources/scripts/bec-tool-all.py
-        resources/scripts/gladiushashes.py
-        resources/scripts/Gladius_Units_IDX_Repack.py
-        resources/scripts/Gladius_Units_IDX_Unpack.py
-        resources/scripts/ngciso-tool.py
-        resources/scripts/tok-tool.py
-        resources/scripts/Tok_Num_Update.py
-        resources/scripts/Update_Strings_Bin.py
-)
+# (Python scripts removed — all tools are now compiled C++)
 
 target_include_directories(gladius-mod-tool PRIVATE
     src
-    ${Python3_INCLUDE_DIRS}
+    ${ZLIB_INCLUDE_DIRS}
 )
 
 target_link_libraries(gladius-mod-tool PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
-    ${Python3_LIBRARIES}
+    ZLIB::ZLIB
 )
 
-# ── Compiler options — suppress warnings from Python/Qt header ordering ───────
-# -Wno-builtin-macro-redefined: Python 3.14+ object.h 'slots' struct member
-# collides with Qt's 'slots' empty macro.  GCC/Clang only; MSVC does not
-# recognise this flag.
 target_compile_options(gladius-mod-tool PRIVATE
-    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wno-builtin-macro-redefined>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wno-unused-parameter>
 )
 
 # ── Copy extract-xiso next to the app after build ────────────────────────────
@@ -230,10 +215,16 @@ if(DOTNET_TOOL)
     add_dependencies(gladius-mod-tool copy-ps2isotool)
 endif()
 
+# ── Copy gladiushashes.json next to the app ───────────────────────────────────
+add_custom_command(TARGET gladius-mod-tool POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/resources/gladiushashes.json"
+        "$<TARGET_FILE_DIR:gladius-mod-tool>/gladiushashes.json"
+    COMMENT "Copying gladiushashes.json alongside app"
+)
+
 # ── Windows self-contained deployment ────────────────────────────────────────
 if(WIN32)
-    # windeployqt scans the exe and copies all required Qt DLLs and plugins
-    # into the output directory, producing a portable deployment folder.
     find_program(WINDEPLOYQT_TOOL windeployqt
         HINTS "${Qt6_DIR}/../../../bin"
     )
@@ -248,15 +239,9 @@ if(WIN32)
         )
     else()
         message(WARNING
-            "windeployqt not found — Qt DLLs will not be copied automatically.\n"
-            "Add <Qt install>/bin to PATH and reconfigure, or run windeployqt manually:\n"
-            "  windeployqt --no-translations gladius-mod-tool.exe")
+            "windeployqt not found — Qt DLLs will not be copied automatically.")
     endif()
 
-    # Copy all MinGW runtime DLLs the exe depends on.  windeployqt handles Qt
-    # but not the compiler runtime (libgcc, libstdc++, libwinpthread, ICU, …).
-    # The helper script uses file(GET_RUNTIME_DEPENDENCIES) to resolve the full
-    # dependency tree and copies every DLL that lives inside the MinGW tree.
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         get_filename_component(MINGW_BIN "${CMAKE_CXX_COMPILER}" DIRECTORY)
         add_custom_command(TARGET gladius-mod-tool POST_BUILD
@@ -268,49 +253,11 @@ if(WIN32)
             COMMENT "Copying MinGW runtime DLLs"
         )
     endif()
-
-    # Copy the Python runtime DLL (e.g. libpython3.14.dll) next to the exe so
-    # the app runs without a system-wide Python installation on the target machine.
-    if(Python3_RUNTIME_LIBRARY)
-        add_custom_command(TARGET gladius-mod-tool POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${Python3_RUNTIME_LIBRARY}"
-                "$<TARGET_FILE_DIR:gladius-mod-tool>"
-            COMMENT "Copying Python runtime DLL alongside app"
-        )
-    else()
-        message(WARNING
-            "Python3_RUNTIME_LIBRARY not set — Python DLL will not be copied automatically.\n"
-            "Copy python3XX.dll manually next to the exe for self-contained deployment.")
-    endif()
-
-    # Bundle the Python standard library for fully self-contained deployment.
-    # PythonRunner sets config.home = appDir/python at startup when that
-    # directory exists; Python then resolves stdlib at python/lib/pythonX.Y/.
-    # The helper script strips large unused subtrees (test suite, pycache, idle,
-    # tkinter, ensurepip) shrinking the stdlib from ~220 MB down to ~35 MB.
-    if(Python3_STDLIB AND EXISTS "${Python3_STDLIB}")
-        set(PY_LIB_DEST
-            "$<TARGET_FILE_DIR:gladius-mod-tool>/python/lib/python${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR}")
-        message(STATUS "Python stdlib to bundle: ${Python3_STDLIB} → python/lib/python${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR}/")
-        add_custom_command(TARGET gladius-mod-tool POST_BUILD
-            COMMAND ${CMAKE_COMMAND}
-                "-DPY_STDLIB_SRC=${Python3_STDLIB}"
-                "-DPY_STDLIB_DST=${PY_LIB_DEST}"
-                -P "${CMAKE_SOURCE_DIR}/cmake/bundle_python_stdlib.cmake"
-            COMMENT "Bundling Python ${Python3_VERSION} stdlib (stripped) → python/lib/python${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR}/"
-        )
-    else()
-        message(WARNING
-            "Python3_STDLIB not found — stdlib will not be bundled automatically.\n"
-            "Copy the Python ${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR} stdlib to "
-            "python/lib/python${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR}/ "
-            "next to the exe for self-contained deployment.")
-    endif()
 endif()
 
 # ── Install ───────────────────────────────────────────────────────────────────
 install(TARGETS gladius-mod-tool DESTINATION bin)
+install(FILES "${CMAKE_SOURCE_DIR}/resources/gladiushashes.json" DESTINATION bin)
 if(XISO_TARGET)
     install(TARGETS ${XISO_TARGET} DESTINATION bin)
 endif()

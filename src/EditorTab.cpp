@@ -24,6 +24,9 @@
 #include <QShortcut>
 #include <QTextDocument>
 #include <QTextCursor>
+#include <QFileDialog>
+#include <QFrame>
+#include <QFormLayout>
 
 // ── File type filter ──────────────────────────────────────────────────────────
 class TextFileFilter : public QSortFilterProxyModel
@@ -168,9 +171,48 @@ EditorTab::EditorTab(QWidget *parent)
     // Install event filter on the find input to handle Escape
     m_findInput->installEventFilter(this);
 
+    // ── Working directory bar ─────────────────────────────────────────────────
+    m_moddedDirEdit = new QLineEdit(this);
+    m_moddedDirEdit->setReadOnly(true);
+    m_moddedDirEdit->setPlaceholderText("No working directory set — unpack an ISO or browse below");
+
+    m_vanillaDirEdit = new QLineEdit(this);
+    m_vanillaDirEdit->setReadOnly(true);
+    m_vanillaDirEdit->setPlaceholderText("Optional — required for Revert to vanilla");
+
+    auto *moddedBrowseBtn  = new QPushButton("Browse…", this);
+    auto *vanillaBrowseBtn = new QPushButton("Browse…", this);
+    moddedBrowseBtn->setFixedWidth(80);
+    vanillaBrowseBtn->setFixedWidth(80);
+    moddedBrowseBtn->setToolTip("Select the modded files directory");
+    vanillaBrowseBtn->setToolTip("Select the vanilla (original) files directory — enables Revert");
+
+    connect(moddedBrowseBtn,  &QPushButton::clicked, this, &EditorTab::browseModdedDir);
+    connect(vanillaBrowseBtn, &QPushButton::clicked, this, &EditorTab::browseVanillaDir);
+
+    auto *moddedRow  = new QHBoxLayout;
+    moddedRow->addWidget(new QLabel("Modded dir:"),  0);
+    moddedRow->addWidget(m_moddedDirEdit,            1);
+    moddedRow->addWidget(moddedBrowseBtn,            0);
+
+    auto *vanillaRow = new QHBoxLayout;
+    vanillaRow->addWidget(new QLabel("Vanilla dir:"), 0);
+    vanillaRow->addWidget(m_vanillaDirEdit,           1);
+    vanillaRow->addWidget(vanillaBrowseBtn,           0);
+
+    auto *dirBarLayout = new QVBoxLayout;
+    dirBarLayout->setContentsMargins(6, 4, 6, 4);
+    dirBarLayout->setSpacing(3);
+    dirBarLayout->addLayout(moddedRow);
+    dirBarLayout->addLayout(vanillaRow);
+
+    auto *separator = new QFrame(this);
+    separator->setFrameShape(QFrame::HLine);
+    separator->setFrameShadow(QFrame::Sunken);
+
     // ── Hint label ────────────────────────────────────────────────────────────
     m_hintLabel = new QLabel(
-        "Unpack a vanilla ISO first, then browse to your Modded_BEC folder here.\n"
+        "Unpack a vanilla ISO first, or use Browse above to open an existing extraction.\n"
         "Only .txt, .tok and similar text files are shown.", this);
     m_hintLabel->setAlignment(Qt::AlignCenter);
     m_hintLabel->setWordWrap(true);
@@ -194,15 +236,30 @@ EditorTab::EditorTab(QWidget *parent)
 
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->addWidget(splitter);
+    layout->setSpacing(0);
+    layout->addLayout(dirBarLayout);
+    layout->addWidget(separator);
+    layout->addWidget(splitter, 1);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
 void EditorTab::setRootPath(const QString &moddedDir, const QString &vanillaDir)
 {
+    // Close open file tabs when switching to a different modded directory
+    if (moddedDir != m_moddedDir && !m_tabs.isEmpty()) {
+        for (int i = m_tabs.size() - 1; i >= 0; --i) {
+            if (!confirmClose(i)) return;  // user cancelled
+            m_fileTabs->removeTab(i);
+            m_tabs.removeAt(i);
+        }
+    }
+
     m_moddedDir  = moddedDir;
     m_vanillaDir = vanillaDir;
+
+    m_moddedDirEdit->setText(moddedDir);
+    m_vanillaDirEdit->setText(vanillaDir);
 
     QModelIndex root = m_model->setRootPath(moddedDir);
     m_tree->setRootIndex(m_proxy->mapFromSource(root));
@@ -210,6 +267,34 @@ void EditorTab::setRootPath(const QString &moddedDir, const QString &vanillaDir)
     m_tree->show();
     m_hintLabel->hide();
     m_fileTabs->show();
+
+    emit workingDirChanged(moddedDir, vanillaDir);
+}
+
+// ── Browse slots ──────────────────────────────────────────────────────────────
+
+void EditorTab::browseModdedDir()
+{
+    QString start = m_moddedDir.isEmpty() ? QDir::homePath() : m_moddedDir;
+    QString dir = QFileDialog::getExistingDirectory(
+        this, "Select Modded Directory", start);
+    if (!dir.isEmpty())
+        setRootPath(dir, m_vanillaDir);
+}
+
+void EditorTab::browseVanillaDir()
+{
+    QString start = m_vanillaDir.isEmpty()
+        ? (m_moddedDir.isEmpty() ? QDir::homePath() : m_moddedDir)
+        : m_vanillaDir;
+    QString dir = QFileDialog::getExistingDirectory(
+        this, "Select Vanilla Directory", start);
+    if (!dir.isEmpty()) {
+        m_vanillaDir = dir;
+        m_vanillaDirEdit->setText(dir);
+        updateToolbar();
+        emit workingDirChanged(m_moddedDir, m_vanillaDir);
+    }
 }
 
 // ── Private slots ─────────────────────────────────────────────────────────────

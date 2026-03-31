@@ -11,6 +11,7 @@ class QLabel;
 class QTabWidget;
 class QSortFilterProxyModel;
 class QLineEdit;
+class QFrame;
 
 // Per-tab state: each open file gets one of these
 struct FileTab {
@@ -25,6 +26,10 @@ class EditorTab : public QWidget
 public:
     explicit EditorTab(QWidget *parent = nullptr);
 
+signals:
+    // Emitted whenever the working directory pair changes (user browse or pipeline unpack)
+    void workingDirChanged(const QString &moddedDir, const QString &vanillaDir);
+
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
 
@@ -33,6 +38,8 @@ public slots:
     void showFindBar();
 
 private slots:
+    void browseModdedDir();
+    void browseVanillaDir();
     void onFileSelected(const QModelIndex &index);
     void onTabChanged(int index);
     void onTabCloseRequested(int index);
@@ -54,13 +61,17 @@ private:
     // ── Multi-file tab bar ────────────────────────────────────────────────────
     QTabWidget *m_fileTabs;   // each page is a QPlainTextEdit
 
+    // ── Working directory bar ─────────────────────────────────────────────────
+    QLineEdit   *m_moddedDirEdit;
+    QLineEdit   *m_vanillaDirEdit;
+
     // ── Toolbar buttons ───────────────────────────────────────────────────────
     QPushButton *m_saveBtn;
     QPushButton *m_saveAllBtn;
     QPushButton *m_reloadBtn;
     QPushButton *m_revertBtn;
 
-    // ── Hint label (shown before any ISO is unpacked) ─────────────────────────
+    // ── Hint label (shown before any working directory is set) ────────────────
     QLabel *m_hintLabel;
 
     // ── State ─────────────────────────────────────────────────────────────────

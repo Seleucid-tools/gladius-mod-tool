@@ -8,7 +8,7 @@ class QPushButton;
 class QLabel;
 class QFileInfo;
 class LogPanel;
-class PythonRunner;
+class NativeRunner;
 class XisoRunner;
 class Ps2IsoRunner;
 
@@ -40,6 +40,7 @@ signals:
 
 private slots:
     void browseIso();
+    void browseModdedDir();
     void unpackVanilla();
     void packModded();
     void onScriptFinished(bool success);
@@ -51,13 +52,15 @@ private:
 
     QLineEdit    *m_isoPathEdit;
     QPushButton  *m_browseBtn;
+    QLineEdit    *m_moddedDirEdit;
+    QPushButton  *m_moddedDirBrowseBtn;
     QPushButton  *m_unpackBtn;
     QPushButton  *m_packBtn;
     QLabel       *m_statusLabel;
 
     // Worker thread + runners
-    QThread      *m_pythonThread;
-    PythonRunner *m_pyRunner;
+    QThread       *m_pythonThread;
+    NativeRunner  *m_pyRunner;
     QThread      *m_xisoThread;
     XisoRunner   *m_xisoRunner;
     QThread      *m_ps2Thread;
@@ -86,8 +89,6 @@ private:
 
     void startNextStep();
     void runPython(const QString &script, const QStringList &args);
-
-    QString scriptPath(const QString &name) const;
     QString platformStr() const;
     QString extractedIsoDir() const;  // "<isoName> extracted iso/"
     QString vanillaBecDir()   const;  // "<isoName> default_BEC/"

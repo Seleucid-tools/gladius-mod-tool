@@ -1,9 +1,8 @@
 #include "PipelineTab.h"
-#include "PythonRunner.h"
+#include "NativeRunner.h"
 #include "XisoRunner.h"
 #include "Ps2IsoRunner.h"
 #include "LogPanel.h"
-#include "ScriptExtractor.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -36,6 +35,23 @@ PipelineTab::PipelineTab(Platform platform, LogPanel *log, QWidget *parent)
     isoRow->addWidget(m_browseBtn);
     isoGroup->setLayout(isoRow);
 
+    // ── Modded directory row ──────────────────────────────────────────────────
+    auto *moddedGroup = new QGroupBox("Modded BEC directory (for pack)", this);
+    moddedGroup->setToolTip(
+        "Directory containing your modded files (the \"working_BEC\" folder).\n"
+        "Set this to repack a specific extraction when managing multiple sessions.\n"
+        "If left empty the tool auto-detects the most recent session for the selected ISO.");
+    m_moddedDirEdit = new QLineEdit(moddedGroup);
+    m_moddedDirEdit->setPlaceholderText("Auto-detect from ISO path (leave empty to use most recent session)");
+    m_moddedDirBrowseBtn = new QPushButton("Browse…", moddedGroup);
+    m_moddedDirBrowseBtn->setFixedWidth(80);
+    connect(m_moddedDirBrowseBtn, &QPushButton::clicked, this, &PipelineTab::browseModdedDir);
+
+    auto *moddedRow = new QHBoxLayout;
+    moddedRow->addWidget(m_moddedDirEdit);
+    moddedRow->addWidget(m_moddedDirBrowseBtn);
+    moddedGroup->setLayout(moddedRow);
+
     // ── Action buttons ────────────────────────────────────────────────────────
     auto *actGroup = new QGroupBox("Pipeline", this);
     m_unpackBtn = new QPushButton("Unpack vanilla ISO", actGroup);
@@ -56,6 +72,7 @@ PipelineTab::PipelineTab(Platform platform, LogPanel *log, QWidget *parent)
     // ── Main layout ───────────────────────────────────────────────────────────
     auto *layout = new QVBoxLayout(this);
     layout->addWidget(isoGroup);
+    layout->addWidget(moddedGroup);
     layout->addWidget(actGroup);
     layout->addStretch();
 
@@ -71,18 +88,29 @@ PipelineTab::PipelineTab(Platform platform, LogPanel *log, QWidget *parent)
         s2.setValue(key, text);
     });
 
-    // ── Python worker thread ──────────────────────────────────────────────────
+    // ── Restore persisted modded dir ──────────────────────────────────────────
+    QString moddedKey = QString("moddedDir/%1").arg(platformStr());
+    QString savedModded = s.value(moddedKey).toString();
+    if (!savedModded.isEmpty() && QDir(savedModded).exists())
+        m_moddedDirEdit->setText(savedModded);
+
+    connect(m_moddedDirEdit, &QLineEdit::textChanged, this, [this, moddedKey](const QString &text) {
+        QSettings s2("GladiusModTool", "MainWindow");
+        s2.setValue(moddedKey, text);
+    });
+
+    // ── Native tool worker thread ─────────────────────────────────────────────
     m_pythonThread = new QThread(this);
-    m_pyRunner     = new PythonRunner;
+    m_pyRunner     = new NativeRunner;
     m_pyRunner->moveToThread(m_pythonThread);
 
     connect(this,        &PipelineTab::runScript,
-            m_pyRunner,  &PythonRunner::run);
-    connect(m_pyRunner,  &PythonRunner::output,
+            m_pyRunner,  &NativeRunner::run);
+    connect(m_pyRunner,  &NativeRunner::output,
             m_log,       &LogPanel::appendOutput);
-    connect(m_pyRunner,  &PythonRunner::error,
+    connect(m_pyRunner,  &NativeRunner::error,
             m_log,       &LogPanel::appendError);
-    connect(m_pyRunner,  &PythonRunner::finished,
+    connect(m_pyRunner,  &NativeRunner::finished,
             this,        &PipelineTab::onScriptFinished);
 
     m_pythonThread->start();
@@ -162,10 +190,6 @@ static QString platformTag(Platform p)
     return "GC";
 }
 
-QString PipelineTab::scriptPath(const QString &name) const
-{
-    return ScriptExtractor::scriptPath(name);
-}
 
 QString PipelineTab::extractedIsoDir() const { return m_workDir + "/" + m_isoName + " extracted iso/"; }
 QString PipelineTab::vanillaBecDir()   const { return m_workDir + "/" + m_isoName + " default_BEC/"; }
@@ -284,11 +308,25 @@ void PipelineTab::browseIso()
         m_isoPathEdit->setText(path);
 }
 
+void PipelineTab::browseModdedDir()
+{
+    QString start = m_moddedDirEdit->text().isEmpty()
+        ? (m_isoPathEdit->text().isEmpty()
+           ? QDir::homePath()
+           : QFileInfo(m_isoPathEdit->text().trimmed()).absolutePath())
+        : m_moddedDirEdit->text();
+    QString dir = QFileDialog::getExistingDirectory(
+        this, "Select modded BEC directory (working_BEC)", start);
+    if (!dir.isEmpty())
+        m_moddedDirEdit->setText(dir);
+}
+
 void PipelineTab::setRunning(bool running)
 {
     m_unpackBtn->setEnabled(!running);
     m_packBtn->setEnabled(!running);
     m_browseBtn->setEnabled(!running);
+    m_moddedDirBrowseBtn->setEnabled(!running);
 }
 
 // ── Public action slots ───────────────────────────────────────────────────────
@@ -316,16 +354,39 @@ void PipelineTab::unpackVanilla()
 
 void PipelineTab::packModded()
 {
-    QString isoPath = m_isoPathEdit->text().trimmed();
-    if (isoPath.isEmpty()) {
-        QMessageBox::warning(this, "No ISO selected",
-            "Please select the vanilla ISO so the tool knows which working directory to use.");
-        return;
+    QString overrideDir = m_moddedDirEdit->text().trimmed();
+
+    if (!overrideDir.isEmpty()) {
+        if (!QDir(overrideDir).exists()) {
+            QMessageBox::warning(this, "Directory not found",
+                "The specified modded BEC directory does not exist:\n" + overrideDir);
+            return;
+        }
+        // Derive m_workDir (parent) and m_isoName from the directory name.
+        // Expected naming: "<isoName> working_BEC" — strip the suffix if present.
+        QDir becDir(overrideDir);
+        QString dirName = becDir.dirName();
+        static const QString kSuffix = " working_BEC";
+        if (dirName.endsWith(kSuffix, Qt::CaseInsensitive))
+            m_isoName = dirName.left(dirName.length() - kSuffix.length());
+        else
+            m_isoName = dirName;
+        becDir.cdUp();
+        m_workDir = becDir.absolutePath();
+    } else {
+        // Fall back to ISO-based auto-detection
+        QString isoPath = m_isoPathEdit->text().trimmed();
+        if (isoPath.isEmpty()) {
+            QMessageBox::warning(this, "No directory selected",
+                "Either select the modded BEC directory above, or select the vanilla ISO "
+                "so the tool can auto-detect the most recent session.");
+            return;
+        }
+        QFileInfo fi(isoPath);
+        m_isoName = fi.completeBaseName();
+        m_workDir = resolveSessionDir(fi, /*createNew=*/false);
     }
 
-    QFileInfo fi(isoPath);
-    m_isoName  = fi.completeBaseName();
-    m_workDir  = resolveSessionDir(fi, /*createNew=*/false);
     m_isUnpack = false;
 
     m_log->appendOutput("=== Pack modded ISO ===");
@@ -340,8 +401,8 @@ void PipelineTab::packModded()
 
 void PipelineTab::runPython(const QString &script, const QStringList &args)
 {
-    m_log->appendOutput(">> python3 " + script.section('/', -1) + " " + args.join(' '));
-    emit runScript(scriptPath(script), args);
+    m_log->appendOutput(">> " + script + " " + args.join(' '));
+    emit runScript(script, args);
 }
 
 void PipelineTab::startNextStep()
@@ -353,8 +414,8 @@ void PipelineTab::startNextStep()
     case Step::UnpackIso: {
         QString isoPath = m_isoPathEdit->text().trimmed();
         if (m_platform == Platform::GC) {
-            // ngciso-tool.py -unpack <iso> <outdir/> <filelist>
-            runPython("ngciso-tool.py", {"-unpack", isoPath, vanillaIsoDir(), "GladiusGamecubeVanilla_FileList.txt"});
+            // ngciso-tool -unpack <iso> <outdir/> <filelist>
+            runPython("ngciso-tool", {"-unpack", isoPath, vanillaIsoDir(), "GladiusGamecubeVanilla_FileList.txt"});
         } else if (m_platform == Platform::PS2) {
             // ps2isotool extract <iso> <outdir>  — extracts directly into extractedIsoDir
             QString dst = extractedIsoDir();
@@ -363,9 +424,9 @@ void PipelineTab::startNextStep()
             m_log->appendOutput(">> ps2isotool extract " + isoPath + " " + dst);
             emit ps2Extract(isoPath, dst);
         } else {
-            // Xbox: extract-xiso creates <isoDir>/<isoName>/ next to the ISO.
+            // Xbox: extract-xiso creates <isoName>/ relative to its CWD (m_workDir).
             // Remove it if it already exists so re-runs don't fail.
-            QString xisoOut = QFileInfo(isoPath).absolutePath() + "/" + m_isoName;
+            QString xisoOut = m_workDir + "/" + m_isoName;
             if (QDir(xisoOut).exists())
                 QDir(xisoOut).removeRecursively();
             m_log->appendOutput(">> extract-xiso " + isoPath);
@@ -375,9 +436,9 @@ void PipelineTab::startNextStep()
     }
 
     case Step::UnpackBec: {
-        // bec-tool-all.py --platform <P> -unpack <bec> <becDir/>
+        // bec-tool --platform <P> -unpack <bec> <becDir/>
         QString becSrc = resolveFile(extractedIsoDir(), becFileName());
-        runPython("bec-tool-all.py", {"--platform", platformStr(), "-unpack", becSrc, vanillaBecDir()});
+        runPython("bec-tool", {"--platform", platformStr(), "-unpack", becSrc, vanillaBecDir()});
         break;
     }
 
@@ -390,19 +451,19 @@ void PipelineTab::startNextStep()
             return;
         }
         QString becSrc = resolveFile(extractedIsoDir(), becFileName());
-        runPython("bec-tool-all.py", {"--platform", platformStr(), "-unpack", becSrc, moddedBecDir()});
+        runPython("bec-tool", {"--platform", platformStr(), "-unpack", becSrc, moddedBecDir()});
         break;
     }
 
     case Step::UnpackIdx: {
         QString dataDir = resolveSubdir(vanillaBecDir(), "data");
-        runPython("Gladius_Units_IDX_Unpack.py", {dataDir});
+        runPython("idx-unpack", {dataDir});
         break;
     }
 
     case Step::UnpackIdxModded: {
         QString dataDir = resolveSubdir(moddedBecDir(), "data");
-        runPython("Gladius_Units_IDX_Unpack.py", {dataDir});
+        runPython("idx-unpack", {dataDir});
         break;
     }
 
@@ -411,25 +472,25 @@ void PipelineTab::startNextStep()
     case Step::TokNumUpdate: {
         QString cfg = resolveSubdir(resolveSubdir(moddedBecDir(), "data"), "config");
         if (!QFile::exists(cfg + "skills.tok") || !QFile::exists(cfg + "items.tok")) {
-            m_log->appendOutput("(skipping Tok_Num_Update.py — skills.tok/items.tok not present)");
+            m_log->appendOutput("(skipping tok-num-update — skills.tok/items.tok not present)");
             m_step = Step::TokCompress;
             startNextStep();
             return;
         }
-        runPython("Tok_Num_Update.py", {cfg});
+        runPython("tok-num-update", {cfg});
         break;
     }
 
     case Step::TokCompress: {
         QString cfg = resolveSubdir(resolveSubdir(moddedBecDir(), "data"), "config");
         if (!QFile::exists(cfg + "skills.tok")) {
-            m_log->appendOutput("(skipping tok-tool.py — skills.tok not present)");
+            m_log->appendOutput("(skipping tok-tool — skills.tok not present)");
             m_step = Step::UpdateStringsBin;
             startNextStep();
             return;
         }
-        // tok-tool.py -c <skills.tok> <skills_strings.bin> <skills_lines.bin> <skills.tok.brf>
-        runPython("tok-tool.py", {"-c",
+        // tok-tool -c <skills.tok> <skills_strings.bin> <skills_lines.bin> <skills.tok.brf>
+        runPython("tok-tool", {"-c",
             cfg + "skills.tok",
             cfg + "skills_strings.bin",
             cfg + "skills_lines.bin",
@@ -441,18 +502,18 @@ void PipelineTab::startNextStep()
     case Step::UpdateStringsBin: {
         QString cfg = resolveSubdir(resolveSubdir(moddedBecDir(), "data"), "config");
         if (!QFile::exists(cfg + "lookuptext_eng.txt")) {
-            m_log->appendOutput("(skipping Update_Strings_Bin.py — lookuptext_eng.txt not present)");
+            m_log->appendOutput("(skipping update-strings-bin — lookuptext_eng.txt not present)");
             m_step = Step::RepackIdx;
             startNextStep();
             return;
         }
-        runPython("Update_Strings_Bin.py", {cfg});
+        runPython("update-strings-bin", {cfg});
         break;
     }
 
     case Step::RepackIdx: {
         QString dataDir = resolveSubdir(moddedBecDir(), "data");
-        runPython("Gladius_Units_IDX_Repack.py", {dataDir});
+        runPython("idx-repack", {dataDir});
         break;
     }
 
@@ -476,20 +537,20 @@ void PipelineTab::startNextStep()
     }
 
     case Step::RepackBec: {
-        // bec-tool-all.py -pack <becDir/> <out.bec> <filelist.txt> --platform <P>
+        // bec-tool -pack <becDir/> <out.bec> <filelist.txt> --platform <P>
         QString outBec = moddedIsoDir() + becFileName();
         QString fileList = moddedBecDir() + "filelist.txt";
-        runPython("bec-tool-all.py", {"-pack", moddedBecDir(), outBec, fileList,
-                                       "--platform", platformStr()});
+        runPython("bec-tool", {"-pack", moddedBecDir(), outBec, fileList,
+                               "--platform", platformStr()});
         break;
     }
 
     case Step::RepackIso: {
         if (m_platform == Platform::GC) {
-            // ngciso-tool.py -pack <isoDir/> <fst.bin> <fileList> <out.iso>
+            // ngciso-tool -pack <isoDir/> <fst.bin> <fileList> <out.iso>
             QString fst      = moddedIsoDir() + "fst.bin";
             QString fileList = moddedIsoDir() + "GladiusGamecubeModded_FileList.txt";
-            runPython("ngciso-tool.py", {"-pack", moddedIsoDir(), fst, fileList, moddedIsoPath()});
+            runPython("ngciso-tool", {"-pack", moddedIsoDir(), fst, fileList, moddedIsoPath()});
         } else if (m_platform == Platform::PS2) {
             // ps2isotool build <srcDir> <outIso> <volName>
             QString src = moddedIsoDir();
@@ -522,10 +583,10 @@ void PipelineTab::onScriptFinished(bool success)
     // Advance state machine
     switch (m_step) {
     case Step::UnpackIso: {
-        // Xbox: extract-xiso creates <isoDir>/<isoName>/ next to the ISO — move to "<workDir>/<isoName> extracted iso/"
+        // Xbox: extract-xiso creates <isoName>/ in its CWD (m_workDir) — move to "<workDir>/<isoName> extracted iso/"
         // GC/PS2: output already goes directly to extractedIsoDir(), no rename needed.
         if (m_platform == Platform::Xbox) {
-            QString src = QFileInfo(m_isoPathEdit->text().trimmed()).absolutePath() + "/" + m_isoName;
+            QString src = m_workDir + "/" + m_isoName;
             QString dst = extractedIsoDir();
             dst.chop(1); // remove trailing slash for rename
 
@@ -549,6 +610,7 @@ void PipelineTab::onScriptFinished(bool success)
     case Step::UnpackIdxModded:
         m_step = Step::Idle;
         m_log->appendOutput("=== Unpack complete. Edit files in: " + moddedBecDir() + " ===");
+        m_moddedDirEdit->setText(moddedBecDir());
         emit unpackComplete(moddedBecDir(), vanillaBecDir());
         break;
 
