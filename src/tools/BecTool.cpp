@@ -332,41 +332,45 @@ bool becPack(const QString &inDir, const QString &outFile,
         }
     }
 
-    bool compress           = (platform == BecPlatform::Xbox || platform == BecPlatform::PS2);
+    bool compress            = (platform == BecPlatform::Xbox || platform == BecPlatform::PS2);
     bool includeUncompressed = (platform == BecPlatform::PS2);
 
-    // Phase 1: parallel load + compress
-    int numThreads = std::max(4u, std::thread::hardware_concurrency());
-    std::vector<std::future<void>> futures;
-    futures.reserve(romMap.size());
-    for (RomSection &s : romMap) {
-        futures.push_back(std::async(std::launch::async, [&s, &inDir, compress]() {
-            QString path = inDir + "/" + s.fileName;
-            // Normalise path separators
-            path.replace('\\', '/');
-            QFile f(path);
-            if (!f.open(QIODevice::ReadOnly)) return;
-            QByteArray data = f.readAll();
-            s.dataSize = static_cast<quint32>(data.size());
+    // Phase 1: parallel load + compress, batched to limit concurrency
+    int numThreads = static_cast<int>(std::max(4u, std::thread::hardware_concurrency()));
+    int total = romMap.size();
+    for (int batch = 0; batch < total; batch += numThreads) {
+        int end = std::min(batch + numThreads, total);
+        std::vector<std::future<void>> futures;
+        futures.reserve(static_cast<size_t>(end - batch));
+        for (int i = batch; i < end; ++i) {
+            RomSection &s = romMap[i];
+            futures.push_back(std::async(std::launch::async, [&s, &inDir, compress]() {
+                QString path = inDir + "/" + s.fileName;
+                path.replace('\\', '/');
+                QFile f(path);
+                if (!f.open(QIODevice::ReadOnly)) return;
+                QByteArray data = f.readAll();
+                s.dataSize = static_cast<quint32>(data.size());
 
-            if (compress) {
-                QByteArray comp = zlibCompress(data);
-                double ratio = data.isEmpty() ? 1.0
-                             : double(comp.size()) / double(data.size());
-                if (ratio < 0.9) {
-                    s.fileData       = comp;
-                    s.compressedSize = static_cast<quint32>(comp.size());
+                if (compress) {
+                    QByteArray comp = zlibCompress(data);
+                    double ratio = data.isEmpty() ? 1.0
+                                 : double(comp.size()) / double(data.size());
+                    if (ratio < 0.9) {
+                        s.fileData       = comp;
+                        s.compressedSize = static_cast<quint32>(comp.size());
+                    } else {
+                        s.fileData       = data;
+                        s.compressedSize = 0;
+                    }
                 } else {
                     s.fileData       = data;
                     s.compressedSize = 0;
                 }
-            } else {
-                s.fileData       = data;
-                s.compressedSize = 0;
-            }
-        }));
+            }));
+        }
+        for (auto &fut : futures) fut.get();
     }
-    for (auto &fut : futures) fut.get();
     out(QStringLiteral("BEC pack: loaded %1 files").arg(romMap.size()));
 
     // Sort by (DataOffset ASC, non-duplicate first)
