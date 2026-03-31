@@ -8,6 +8,7 @@
 #include <zlib.h>
 #include <algorithm>
 #include <future>
+#include <numeric>
 #include <vector>
 #include <thread>
 #include <filesystem>
@@ -335,41 +336,30 @@ bool becPack(const QString &inDir, const QString &outFile,
     bool compress            = (platform == BecPlatform::Xbox || platform == BecPlatform::PS2);
     bool includeUncompressed = (platform == BecPlatform::PS2);
 
-    // Phase 1: parallel load + compress, batched to limit concurrency
-    int numThreads = static_cast<int>(std::max(4u, std::thread::hardware_concurrency()));
-    int total = romMap.size();
-    for (int batch = 0; batch < total; batch += numThreads) {
-        int end = std::min(batch + numThreads, total);
-        std::vector<std::future<void>> futures;
-        futures.reserve(static_cast<size_t>(end - batch));
-        for (int i = batch; i < end; ++i) {
-            RomSection &s = romMap[i];
-            futures.push_back(std::async(std::launch::async, [&s, &inDir, compress]() {
-                QString path = inDir + "/" + s.fileName;
-                path.replace('\\', '/');
-                QFile f(path);
-                if (!f.open(QIODevice::ReadOnly)) return;
-                QByteArray data = f.readAll();
-                s.dataSize = static_cast<quint32>(data.size());
+    // Phase 1: sequential load + compress (I/O-bound; async caused QByteArray COW heap corruption)
+    for (RomSection &s : romMap) {
+        QString path = inDir + "/" + s.fileName;
+        path.replace('\\', '/');
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly)) continue;
+        QByteArray data = f.readAll();
+        s.dataSize = static_cast<quint32>(data.size());
 
-                if (compress) {
-                    QByteArray comp = zlibCompress(data);
-                    double ratio = data.isEmpty() ? 1.0
-                                 : double(comp.size()) / double(data.size());
-                    if (ratio < 0.9) {
-                        s.fileData       = comp;
-                        s.compressedSize = static_cast<quint32>(comp.size());
-                    } else {
-                        s.fileData       = data;
-                        s.compressedSize = 0;
-                    }
-                } else {
-                    s.fileData       = data;
-                    s.compressedSize = 0;
-                }
-            }));
+        if (compress) {
+            QByteArray comp = zlibCompress(data);
+            double ratio = data.isEmpty() ? 1.0
+                         : double(comp.size()) / double(data.size());
+            if (ratio < 0.9) {
+                s.fileData       = comp;
+                s.compressedSize = static_cast<quint32>(comp.size());
+            } else {
+                s.fileData       = data;
+                s.compressedSize = 0;
+            }
+        } else {
+            s.fileData       = data;
+            s.compressedSize = 0;
         }
-        for (auto &fut : futures) fut.get();
     }
     out(QStringLiteral("BEC pack: loaded %1 files").arg(romMap.size()));
 
@@ -426,14 +416,16 @@ bool becPack(const QString &inDir, const QString &outFile,
     writeU32LE(out_f, nrOfFiles);
     writeU32LE(out_f, headerMagic);
 
-    // Sort by PathHash for the entry table
-    QVector<RomSection> byHash = romMap;
-    std::sort(byHash.begin(), byHash.end(), [](const RomSection &a, const RomSection &b) {
-        return a.pathHash < b.pathHash;
+    // Sort indices by PathHash for the entry table (avoids copying all fileData QByteArrays)
+    QVector<int> hashOrder(romMap.size());
+    std::iota(hashOrder.begin(), hashOrder.end(), 0);
+    std::sort(hashOrder.begin(), hashOrder.end(), [&romMap](int a, int b) {
+        return romMap[a].pathHash < romMap[b].pathHash;
     });
 
     // Write entry table
-    for (const RomSection &s : byHash) {
+    for (int idx : hashOrder) {
+        const RomSection &s = romMap[idx];
         writeU32LE(out_f, s.pathHash);
         writeU32LE(out_f, s.dataOffset);
         writeU32LE(out_f, s.compressedSize);
