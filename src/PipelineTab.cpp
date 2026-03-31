@@ -283,8 +283,11 @@ bool PipelineTab::copyDirExcluding(const QString &src, const QString &dst,
 
 QString PipelineTab::becFileName()    const
 {
-    // GC and Xbox use gladius.bec; PS2 uses data.bec
-    return (m_platform == Platform::PS2) ? "data.bec" : "gladius.bec";
+    switch (m_platform) {
+        case Platform::GC:   return QStringLiteral("audio.bec");
+        case Platform::PS2:  return QStringLiteral("data.bec");
+        default:             return QStringLiteral("gladius.bec"); // Xbox
+    }
 }
 
 QString PipelineTab::moddedIsoPath()  const
