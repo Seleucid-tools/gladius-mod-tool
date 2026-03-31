@@ -7,10 +7,7 @@
 #include <QFileInfo>
 #include <zlib.h>
 #include <algorithm>
-#include <future>
 #include <numeric>
-#include <vector>
-#include <thread>
 #include <filesystem>
 
 namespace Tools {
@@ -206,46 +203,34 @@ bool becUnpack(const QString &becFile, const QString &outDir,
                            + QString::number(nrOfFiles)     + ','
                            + QString::number(headerMagic)   + '\n';
 
-    // Parallel decompress + write using std::async, batched to limit concurrency
-    int numThreads = static_cast<int>(std::max(4u, std::thread::hardware_concurrency()));
+    // Sequential decompress + write using the already-open BEC file handle.
+    // Sections are sorted by dataOffset so reads are sequential in the BEC file.
+    // Async threading was removed: QFile (QObject) constructed in std::async threads
+    // triggers Qt QThreadData init/cleanup races that corrupt glibc's heap, causing
+    // SIGABRT in subsequent becPack calls within the same process.
     bool ok = true;
     int completed = 0;
     int total = sections.size();
 
-    for (int batch = 0; batch < total; batch += numThreads) {
-        int end = std::min(batch + numThreads, total);
-        std::vector<std::future<bool>> futures;
-        futures.reserve(static_cast<size_t>(end - batch));
+    for (const RomSection &s : sections) {
+        f.seek(s.dataOffset);
+        QByteArray data = f.read(s.storedSize());
+        if (!data.isEmpty() && static_cast<quint8>(data[0]) == 0x78)
+            data = zlibDecompress(data);
 
-        for (int i = batch; i < end; ++i) {
-            RomSection s = sections[i]; // capture by value
-            futures.push_back(std::async(std::launch::async, [s, &becFile, &outDir, &err]() -> bool {
-                QFile rf(becFile);
-                if (!rf.open(QIODevice::ReadOnly)) return false;
-                rf.seek(s.dataOffset);
-                QByteArray data = rf.read(s.dataSize);
-                if (!data.isEmpty() && static_cast<quint8>(data[0]) == 0x78)
-                    data = zlibDecompress(data);
-
-                QString fullPath = outDir + s.fileName;
-                std::filesystem::create_directories(
-                    std::filesystem::path(fullPath.toStdString()).parent_path());
-                QFile wf(fullPath);
-                if (!wf.open(QIODevice::WriteOnly)) {
-                    err(QStringLiteral("Cannot write: ") + fullPath);
-                    return false;
-                }
-                wf.write(data);
-                return true;
-            }));
+        QString fullPath = outDir + s.fileName;
+        std::filesystem::create_directories(
+            std::filesystem::path(fullPath.toStdString()).parent_path());
+        QFile wf(fullPath);
+        if (!wf.open(QIODevice::WriteOnly)) {
+            err(QStringLiteral("Cannot write: ") + fullPath);
+            ok = false;
+            continue;
         }
-
-        for (auto &fut : futures) {
-            ok &= fut.get();
-            ++completed;
-            if (completed % 500 == 0)
-                out(QStringLiteral("Unpack progress: %1/%2").arg(completed).arg(total));
-        }
+        wf.write(data);
+        ++completed;
+        if (completed % 500 == 0)
+            out(QStringLiteral("Unpack progress: %1/%2").arg(completed).arg(total));
     }
 
     // Build filelist.txt (in original order, sorted by DataOffset)
