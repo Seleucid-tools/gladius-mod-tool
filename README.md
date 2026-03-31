@@ -10,9 +10,17 @@ All modding logic is implemented natively in C++. There is no Python dependency.
 
 ### extract-xiso (bundled)
 
-`extract-xiso` v2.7.1 (XboxDev/extract-xiso, BSD-style licence) is bundled
-under `third_party/extract-xiso/` and compiled automatically — no separate
-download required. After build, CMake copies the binary next to the app.
+`extract-xiso` v2.7.1 by **in, XboxDev** ([@XboxDev/extract-xiso](https://github.com/xboxdev/extract-xiso),
+BSD-style licence) is bundled under `third_party/extract-xiso/` and compiled
+automatically — no separate download required. After build, CMake copies the
+binary next to the app.
+
+### ps2isotool (bundled)
+
+`ps2isotool` by **Finzenku** ([@Finzenku/Ps2IsoTools](https://github.com/Finzenku/Ps2IsoTools),
+MIT licence) is used for PS2 ISO extraction and building. CMake compiles it
+automatically via `dotnet publish` if the .NET SDK is present, then copies the
+self-contained binary next to the app.
 
 ### gladiushashes.json (bundled)
 
@@ -229,5 +237,11 @@ on Windows).
 
 ## Credits
 
-Modding logic based on the Gladius community toolkit (original Python scripts v007).
+Modding logic based on the original Gladius toolkit Python scripts (v007) by
+**JimB16** ([@JimB16/Gladius](https://github.com/JimB16/Gladius)).
+
+`extract-xiso` by **in, XboxDev** ([@XboxDev/extract-xiso](https://github.com/xboxdev/extract-xiso)).
+
+`ps2isotool` by **Finzenku** ([@Finzenku/Ps2IsoTools](https://github.com/Finzenku/Ps2IsoTools)).
+
 Qt6 GUI and C++ reimplementation by this project.
