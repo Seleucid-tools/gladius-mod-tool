@@ -240,6 +240,9 @@ on Windows).
 Modding logic based on the original Gladius toolkit Python scripts (v007) by
 **JimB16** ([@JimB16/Gladius](https://github.com/JimB16/Gladius)).
 
+IDX unpack/repack tools and `lookuptext` strings bin updater by
+**Swift016** ([@Swift016](https://github.com/Swift016)) — unpublished.
+
 `extract-xiso` by **in, XboxDev** ([@XboxDev/extract-xiso](https://github.com/xboxdev/extract-xiso)).
 
 `ps2isotool` by **Finzenku** ([@Finzenku/Ps2IsoTools](https://github.com/Finzenku/Ps2IsoTools)).
