@@ -277,7 +277,9 @@ bool becPack(const QString &inDir, const QString &outFile,
             QStringList parts = line.split(',');
             if (lineIdx == 0) {
                 fileAlignment = parts.value(0).toUInt();
-                // parts[1] = file count (we'll recompute)
+                // parts[1] = file count — reserve upfront to avoid reallocateAndGrow
+                quint32 n = parts.value(1).toUInt();
+                if (n > 0) romMap.reserve(static_cast<int>(n) + 64);
                 headerMagic   = parts.value(2).toUInt();
             } else if (parts.size() >= 5) {
                 RomSection s;

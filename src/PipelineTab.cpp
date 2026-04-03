@@ -237,6 +237,7 @@ QString PipelineTab::resolveFile(const QString &dir, const QString &name)
     for (const QFileInfo &fi : entries)
         if (fi.fileName().compare(name, Qt::CaseInsensitive) == 0)
             return fi.absoluteFilePath();
+
     return dir + (dir.endsWith('/') ? "" : "/") + name;
 }
 
@@ -264,13 +265,13 @@ bool PipelineTab::copyDirExcluding(const QString &src, const QString &dst,
         QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot);
 
     for (const QFileInfo &fi : entries) {
+        if (fi.fileName().compare(skipFile, Qt::CaseInsensitive) == 0)
+            continue; // skip both files and directories matching the skip name
         if (fi.isDir()) {
             if (!copyDirExcluding(fi.absoluteFilePath(),
                                   dst + "/" + fi.fileName(), skipFile))
                 return false;
         } else {
-            if (fi.fileName().compare(skipFile, Qt::CaseInsensitive) == 0)
-                continue;
             QString destPath = dst + "/" + fi.fileName();
             if (QFile::exists(destPath))
                 QFile::remove(destPath);
@@ -284,7 +285,7 @@ bool PipelineTab::copyDirExcluding(const QString &src, const QString &dst,
 QString PipelineTab::becFileName()    const
 {
     switch (m_platform) {
-        case Platform::GC:   return QStringLiteral("audio.bec");
+        case Platform::GC:   return QStringLiteral("gladius.bec");
         case Platform::PS2:  return QStringLiteral("data.bec");
         default:             return QStringLiteral("gladius.bec"); // Xbox
     }
@@ -521,12 +522,18 @@ void PipelineTab::startNextStep()
     }
 
     case Step::PrepModdedIso: {
-        // Copy everything from extracted iso → modded_ISO, skipping gladius.bec
+        // Copy everything from extracted iso → modded_ISO, skipping the game data BEC.
+        // GC: the game BEC is audio.bec/gladius.bec — skip "gladius.bec" so the rest of
+        //     audio.bec/ (audio.bec itself, movies, loader.rel, opening.bnr) is copied.
+        // PS2/Xbox: the game BEC is a top-level file; becFileName() is the right skip name.
+        QString skipName = (m_platform == Platform::GC)
+            ? QStringLiteral("gladius.bec")
+            : becFileName();
         QString src = extractedIsoDir();
         QString dst = moddedIsoDir();
         dst.chop(1); // remove trailing slash for mkpath
         m_log->appendOutput("Copying base ISO files to modded ISO directory…");
-        if (!copyDirExcluding(src, dst, becFileName())) {
+        if (!copyDirExcluding(src, dst, skipName)) {
             m_log->appendError("Failed to copy base ISO files.");
             m_step = Step::Idle;
             setRunning(false);
@@ -541,7 +548,13 @@ void PipelineTab::startNextStep()
 
     case Step::RepackBec: {
         // bec-tool -pack <becDir/> <out.bec> <filelist.txt> --platform <P>
-        QString outBec = moddedIsoDir() + becFileName();
+        // GC: the BEC lives inside audio.bec/ subdirectory as gladius.bec
+        QString outBec;
+        if (m_platform == Platform::GC) {
+            outBec = moddedIsoDir() + "gladius.bec";
+        } else {
+            outBec = moddedIsoDir() + becFileName();
+        }
         QString fileList = moddedBecDir() + "filelist.txt";
         runPython("bec-tool", {"-pack", moddedBecDir(), outBec, fileList,
                                "--platform", platformStr()});
@@ -551,8 +564,9 @@ void PipelineTab::startNextStep()
     case Step::RepackIso: {
         if (m_platform == Platform::GC) {
             // ngciso-tool -pack <isoDir/> <fst.bin> <fileList> <out.iso>
+            // The filelist was written during unpack and copied into moddedIsoDir unchanged.
             QString fst      = moddedIsoDir() + "fst.bin";
-            QString fileList = moddedIsoDir() + "GladiusGamecubeModded_FileList.txt";
+            QString fileList = moddedIsoDir() + "GladiusGamecubeVanilla_FileList.txt";
             runPython("ngciso-tool", {"-pack", moddedIsoDir(), fst, fileList, moddedIsoPath()});
         } else if (m_platform == Platform::PS2) {
             // ps2isotool build <srcDir> <outIso> <volName>

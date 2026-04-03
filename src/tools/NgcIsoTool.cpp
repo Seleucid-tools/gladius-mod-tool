@@ -53,7 +53,7 @@ static quint32 alignAdr(quint32 adr, quint32 alignVal)
 static bool writeSection(QFile &src, const QString &dir, const QString &filename,
                          qint64 addr, qint64 size)
 {
-    if (size <= 0) return true;
+    if (size < 0) return true;
     src.seek(addr);
     QByteArray data = src.read(size);
 
@@ -74,9 +74,9 @@ static void alignWithZeros(QFile &f, quint32 alignment)
         f.write(QByteArray(static_cast<int>(pad), '\0'));
 }
 
-// ── RomSection ────────────────────────────────────────────────────────────────
+// ── IsoSection ────────────────────────────────────────────────────────────────
 
-struct RomSection {
+struct IsoSection {
     QString name;
     quint32 address;
     int     fileID;
@@ -161,7 +161,9 @@ struct fstDir {
     // Returns (fstWords, stringData)
     QPair<QVector<quint32>, QByteArray> createFST(int strTableLen, int parentID, int ownID) const
     {
-        if (fileID == -1) return {};
+        // Skip system files and gap-fillers (fileID==-1, non-empty name).
+        // Root also has fileID==-1 but has an empty name and must be serialised.
+        if (fileID == -1 && !name.isEmpty()) return {};
 
         quint32 word2 = 0, word3 = 0;
         QByteArray string;
@@ -199,7 +201,7 @@ struct fstDir {
 // ── UNPACK ────────────────────────────────────────────────────────────────────
 
 static void parseDOL(QFile &f, quint32 base, const QString &filedir,
-                     QVector<RomSection> &romMap, const LogCb &out)
+                     QVector<IsoSection> &romMap, const LogCb &out)
 {
     quint32 totSize = 0x100;
     QVector<quint32> textPos(6), textMem(6), textSize(6);
@@ -218,10 +220,10 @@ static void parseDOL(QFile &f, quint32 base, const QString &filedir,
         totSize += dataSize[i];
     }
     for (int i = 0; i < 6; ++i)
-        writeSection(f, filedir + "code/", "Text_" + QString::number(textMem[i], 16) + ".bin",
+        writeSection(f, filedir + "code/", "Text_0x" + QString::number(textMem[i], 16) + ".bin",
                      base + textPos[i], textSize[i]);
     for (int i = 0; i < 10; ++i)
-        writeSection(f, filedir + "code/", "Data_" + QString::number(dataMem[i], 16) + ".bin",
+        writeSection(f, filedir + "code/", "Data_0x" + QString::number(dataMem[i], 16) + ".bin",
                      base + dataPos[i], dataSize[i]);
 
     totSize = alignAdr(totSize, 0x100);
@@ -230,7 +232,7 @@ static void parseDOL(QFile &f, quint32 base, const QString &filedir,
 }
 
 static void parseFST(QFile &f, quint32 base, const QString &filedir,
-                     QVector<RomSection> &romMap, QVector<DirName> &dirNames,
+                     QVector<IsoSection> &romMap, QVector<DirName> &dirNames,
                      const LogCb &out)
 {
     quint32 numEntries = readU32BE(f, base + 0x8);
@@ -253,7 +255,11 @@ static void parseFST(QFile &f, quint32 base, const QString &filedir,
         quint32 word3  = readU32BE(f, base + off + 8);
 
         if (flag == 1) {
-            QString name = readString0(f, base + strOff, 32);
+            // Root entry (i==0) must have an empty name: its str_offset=0 points to the
+            // first real filename in the string table (e.g. "audio.bec"), not the root's
+            // name. Python explicitly forces string="" when offset==0. If we read it here
+            // we prepend that filename to every extracted path and block all other writes.
+            QString name = (i == 0) ? QString() : readString0(f, base + strOff, 32);
             dirNames.append({name, static_cast<quint32>(off / 0xc), word3});
         } else if (flag == 0) {
             QString name = readString0(f, base + strOff, 32);
@@ -286,7 +292,7 @@ bool ngcIsoUnpack(const QString &isoPath, const QString &outDir,
     header += "\nMaker Code:  " + readString(f, 0x4,  2);
     header += "\nGame Name:   " + readString(f, 0x20, 0x3e0);
 
-    QVector<RomSection> romMap;
+    QVector<IsoSection> romMap;
     QVector<DirName>    dirNames;
 
     writeSection(f, outDir, "boot.bin", 0x0,   0x440);  romMap.append({"/boot.bin", 0x0, -1, 0x440});
@@ -305,12 +311,12 @@ bool ngcIsoUnpack(const QString &isoPath, const QString &outDir,
     parseFST(f, fstOffset, outDir, romMap, dirNames, out);
 
     // Build file list
-    std::sort(romMap.begin(), romMap.end(), [](const RomSection &a, const RomSection &b) {
+    std::sort(romMap.begin(), romMap.end(), [](const IsoSection &a, const IsoSection &b) {
         return a.address < b.address;
     });
     QString fileList;
     quint32 prevEnd = 0;
-    for (const RomSection &s : romMap) {
+    for (const IsoSection &s : romMap) {
         if (s.address > prevEnd) {
             fileList += QString::number(prevEnd, 16) + " /Unknown_"
                       + QString::number(prevEnd, 16) + ".bin -1 "
@@ -403,16 +409,19 @@ bool ngcIsoPack(const QString &inDir, const QString &fstFile,
                 quint32 addr = words[0].toUInt(nullptr, 16);
                 QString path = words[1];
                 int fid      = words[2].toInt(nullptr, 16);
-                entries.append({addr, path, fid, 0});
+                quint32 sz   = words[3].toUInt(nullptr, 16);
+                entries.append({addr, path, fid, sz});
             }
         }
     }
 
     fstDir root("", 1, -1, 0);
     for (auto &e : entries) {
-        quint32 fsz = static_cast<quint32>(QFileInfo(inDir + e.path).size());
-        e.size = fsz;
-        addFileToFST(root, e.path, e.fileID, fsz);
+        // Use on-disk size if the file exists; fall back to the size from the filelist
+        // (Unknown_*.bin gap-filler entries are never extracted to disk).
+        QFileInfo fi(inDir + e.path);
+        if (fi.exists()) e.size = static_cast<quint32>(fi.size());
+        addFileToFST(root, e.path, e.fileID, e.size);
     }
 
     // Update fst.bin size
@@ -449,16 +458,22 @@ bool ngcIsoPack(const QString &inDir, const QString &fstFile,
     QFile iso(outIso);
     if (!iso.open(QIODevice::WriteOnly)) { err(QStringLiteral("Cannot write ISO: ") + outIso); return false; }
 
-    qint64 bootfileOffset = 0, fstOffset = 0;
+    qint64 bootfileOffset = 0, fstOffset = 0, fstSize = 0;
     for (const auto &e : entries) {
         QString src = inDir + e.path;
         QFile sf(src);
-        if (!sf.open(QIODevice::ReadOnly)) { err(QStringLiteral("Cannot read: ") + src); return false; }
 
         if (e.path == "/bootfile.dol") bootfileOffset = iso.pos();
         if (e.path == "/fst.bin")      fstOffset      = iso.pos();
 
-        iso.write(sf.readAll());
+        if (!sf.open(QIODevice::ReadOnly)) {
+            // Gap-filler entries (Unknown_*.bin) were never extracted; write zeros.
+            iso.write(QByteArray(static_cast<int>(e.size), '\0'));
+        } else {
+            QByteArray data = sf.readAll();
+            if (e.path == "/fst.bin") fstSize = data.size();
+            iso.write(data);
+        }
 
         if (e.path == "/appldr.bin" || e.path == "/bootfile.dol")
             alignWithZeros(iso, 0x100);
@@ -468,15 +483,20 @@ bool ngcIsoPack(const QString &inDir, const QString &fstFile,
         out(QStringLiteral("wrote ") + e.path);
     }
 
-    // Patch bootfile and fst offsets into boot.bin header
+    // Patch DOL offset, FST offset, FST size, and max FST size into boot.bin header.
+    // GC header layout: 0x420=DOL offset, 0x424=FST offset, 0x428=FST size, 0x42C=max FST size.
     iso.seek(0x420);
-    quint8 buf[8] = {
+    quint8 buf[16] = {
         quint8(bootfileOffset >> 24), quint8(bootfileOffset >> 16),
         quint8(bootfileOffset >> 8),  quint8(bootfileOffset),
         quint8(fstOffset >> 24),      quint8(fstOffset >> 16),
-        quint8(fstOffset >> 8),       quint8(fstOffset)
+        quint8(fstOffset >> 8),       quint8(fstOffset),
+        quint8(fstSize >> 24),        quint8(fstSize >> 16),
+        quint8(fstSize >> 8),         quint8(fstSize),
+        quint8(fstSize >> 24),        quint8(fstSize >> 16),
+        quint8(fstSize >> 8),         quint8(fstSize)
     };
-    iso.write(reinterpret_cast<const char *>(buf), 8);
+    iso.write(reinterpret_cast<const char *>(buf), 16);
 
     out(QStringLiteral("NGC ISO packed: ") + QFileInfo(outIso).fileName());
     return true;
