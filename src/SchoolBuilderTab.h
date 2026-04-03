@@ -38,6 +38,8 @@ struct ItemDef {
     QString subtype;   // Sword | Bow | Armor | etc.
     QString category;  // Medium | Plain | etc.
     int     minLevel = 1;
+    QString bonus;     // accessory bonus: "Affinity: Air +10", "Skill: HPUP", "Stat: defense +5", etc.
+                       // weapon subtype display label also uses this for non-accessory types
 };
 
 struct SkillDef {
@@ -155,10 +157,12 @@ private:
     QLineEdit    *m_statsEdit;   // read-only normally; editable in bypass mode
     QSpinBox     *m_jpSpin;      // disabled normally; enabled in bypass mode
     QComboBox    *m_weaponCombo;
+    QLabel       *m_weaponTypeLabel;    // shows weapon subtype (e.g. "Sword")
     QComboBox    *m_armorCombo;
     QComboBox    *m_shieldCombo;
     QComboBox    *m_helmetCombo;
     QComboBox    *m_accessoryCombo;
+    QLabel       *m_accessoryBonusLabel; // shows accessory bonus
     QListWidget  *m_skillList;
     QPushButton  *m_addBtn;
     QPushButton  *m_cancelEditBtn;
@@ -191,6 +195,7 @@ private:
     void refreshItemCombos();
     void refreshSkillList();
     void refreshStats();
+    void updateItemLabels();
 
     // ── Computation ───────────────────────────────────────────────────────────
     QVector<int>     computeStats  (const ClassDef &cls, int level) const;

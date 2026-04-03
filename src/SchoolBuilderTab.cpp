@@ -227,6 +227,11 @@ SchoolBuilderTab::SchoolBuilderTab(QWidget *parent)
                     m_helmetCombo, m_accessoryCombo})
         c->setMinimumWidth(200);
 
+    m_weaponTypeLabel    = new QLabel(this);
+    m_accessoryBonusLabel = new QLabel(this);
+    m_weaponTypeLabel->setStyleSheet("color: gray; font-style: italic;");
+    m_accessoryBonusLabel->setStyleSheet("color: gray; font-style: italic;");
+
     m_skillList = new QListWidget(this);
     m_skillList->setMinimumHeight(160);
 
@@ -241,6 +246,11 @@ SchoolBuilderTab::SchoolBuilderTab(QWidget *parent)
     connect(m_addBtn,        &QPushButton::clicked, this, &SchoolBuilderTab::addGladiator);
     connect(m_cancelEditBtn, &QPushButton::clicked, this, &SchoolBuilderTab::clearEditMode);
 
+    connect(m_weaponCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) { updateItemLabels(); });
+    connect(m_accessoryCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) { updateItemLabels(); });
+
     // Affinity widget container for the form row
     auto *affinityWidget = new QWidget(this);
     affinityWidget->setLayout(affinityRow);
@@ -253,11 +263,19 @@ SchoolBuilderTab::SchoolBuilderTab(QWidget *parent)
     form->addRow("Affinity:", affinityWidget);
     form->addRow("Stats (CON, PWR, ACC, DEF, INI, MOV):", m_statsEdit);
     form->addRow("Job Points:", m_jpSpin);
-    form->addRow("Weapon:",     m_weaponCombo);
-    form->addRow("Armor:",      m_armorCombo);
-    form->addRow("Shield:",     m_shieldCombo);
-    form->addRow("Helmet:",     m_helmetCombo);
-    form->addRow("Accessory:",  m_accessoryCombo);
+    auto *weaponRow = new QHBoxLayout;
+    weaponRow->addWidget(m_weaponCombo);
+    weaponRow->addWidget(m_weaponTypeLabel);
+    weaponRow->addStretch();
+    form->addRow("Weapon:", weaponRow);
+    form->addRow("Armor:",  m_armorCombo);
+    form->addRow("Shield:", m_shieldCombo);
+    form->addRow("Helmet:", m_helmetCombo);
+    auto *accessoryRow = new QHBoxLayout;
+    accessoryRow->addWidget(m_accessoryCombo);
+    accessoryRow->addWidget(m_accessoryBonusLabel);
+    accessoryRow->addStretch();
+    form->addRow("Accessory:", accessoryRow);
 
     auto *skillsGroup = new QGroupBox("Starting Skills", this);
     auto *skillsLayout = new QVBoxLayout(skillsGroup);
@@ -678,7 +696,7 @@ bool SchoolBuilderTab::loadFromJson(const QString &path)
         QJsonObject obj = item.toObject();
         m_items.append({ obj["name"].toString(), obj["type"].toString(),
                          obj["subtype"].toString(), obj["category"].toString(),
-                         obj["minLevel"].toInt(1) });
+                         obj["minLevel"].toInt(1), obj["bonus"].toString() });
     }
 
     // ── Skills ────────────────────────────────────────────────────────────────
@@ -786,6 +804,7 @@ bool SchoolBuilderTab::serializeToJson(const QString &path) const
         obj["name"] = item.name; obj["type"] = item.type;
         obj["subtype"] = item.subtype; obj["category"] = item.category;
         obj["minLevel"] = item.minLevel;
+        if (!item.bonus.isEmpty()) obj["bonus"] = item.bonus;
         itemsArr.append(obj);
     }
     root["items"] = itemsArr;
@@ -979,7 +998,31 @@ void SchoolBuilderTab::parseItems(const QString &path)
             inItem = true; continue;
         }
         if (!inItem) continue;
-        if (t.startsWith("ITEMMINLEVEL:")) current.minLevel = t.mid(13).trimmed().toInt();
+        if (t.startsWith("ITEMMINLEVEL:")) {
+            current.minLevel = t.mid(13).trimmed().toInt();
+        } else if (t.startsWith("ITEMSKILL:") && current.type.compare("Accessory", Qt::CaseInsensitive) == 0) {
+            // Strip "Item " prefix common to accessory passive skills
+            QString sk = unquote(t.mid(10).trimmed());
+            if (sk.startsWith("Item ")) sk = sk.mid(5);
+            current.bonus = sk;
+        } else if (t.startsWith("ITEMAFFINITY:") && current.type.compare("Accessory", Qt::CaseInsensitive) == 0) {
+            QString rest = t.mid(13).trimmed(); // "Air , 14"
+            QStringList parts = rest.split(',');
+            if (parts.size() >= 2) {
+                QString elem = parts[0].trimmed();
+                int val = parts[1].trimmed().toInt();
+                current.bonus = QString("%1 Affinity +%2").arg(elem).arg(val);
+            }
+        } else if (t.startsWith("ITEMSTATMOD:") && current.type.compare("Accessory", Qt::CaseInsensitive) == 0) {
+            QString rest = t.mid(12).trimmed(); // "accuracy, 15"
+            QStringList parts = rest.split(',');
+            if (parts.size() >= 2) {
+                QString stat = parts[0].trimmed();
+                int val = parts[1].trimmed().toInt();
+                stat[0] = stat[0].toUpper();
+                current.bonus = QString("%1 %2%3").arg(stat).arg(val >= 0 ? "+" : "").arg(val);
+            }
+        }
     }
     saveItem();
 }
@@ -1312,6 +1355,37 @@ void SchoolBuilderTab::refreshItemCombos()
             }
         }
     }
+    updateItemLabels();
+}
+
+void SchoolBuilderTab::updateItemLabels()
+{
+    // Weapon type label
+    QString weaponName = m_weaponCombo->currentText();
+    if (weaponName == "(none)" || weaponName.isEmpty()) {
+        m_weaponTypeLabel->clear();
+    } else {
+        // Look up subtype from loaded items
+        for (const ItemDef &item : m_items) {
+            if (item.name == weaponName) {
+                m_weaponTypeLabel->setText(item.subtype);
+                break;
+            }
+        }
+    }
+
+    // Accessory bonus label
+    QString accName = m_accessoryCombo->currentText();
+    if (accName == "(none)" || accName.isEmpty()) {
+        m_accessoryBonusLabel->clear();
+    } else {
+        for (const ItemDef &item : m_items) {
+            if (item.name == accName) {
+                m_accessoryBonusLabel->setText(item.bonus);
+                break;
+            }
+        }
+    }
 }
 
 void SchoolBuilderTab::refreshSkillList()
@@ -1416,8 +1490,11 @@ int SchoolBuilderTab::computeJP(const ClassDef &cls, int level) const
 
 bool SchoolBuilderTab::itemEquippable(int itemMinLevel, int gladiatorLevel) const
 {
-    if (gladiatorLevel >= 11) return true;
-    return itemMinLevel <= gladiatorLevel;
+    // Tier brackets: levels 1-5 can equip items minLevel 1-5,
+    //                levels 6-10 can equip items minLevel 1-10,
+    //                levels 11-30 can equip any item.
+    int cap = (gladiatorLevel >= 11) ? 30 : (gladiatorLevel >= 6) ? 10 : 5;
+    return itemMinLevel <= cap;
 }
 
 bool SchoolBuilderTab::itemMatchesCat(const ItemDef &item, const ItemCatEntry &cat) const
