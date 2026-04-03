@@ -223,6 +223,14 @@ add_custom_command(TARGET gladius-mod-tool POST_BUILD
     COMMENT "Copying gladiushashes.json alongside app"
 )
 
+# ── Copy schoolbuilder_vanilla.json into resources/ next to the app ───────────
+add_custom_command(TARGET gladius-mod-tool POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/resources/schoolbuilder_vanilla.json"
+        "$<TARGET_FILE_DIR:gladius-mod-tool>/resources/schoolbuilder_vanilla.json"
+    COMMENT "Copying schoolbuilder_vanilla.json alongside app"
+)
+
 # ── Windows self-contained deployment ────────────────────────────────────────
 if(WIN32)
     find_program(WINDEPLOYQT_TOOL windeployqt
@@ -258,6 +266,7 @@ endif()
 # ── Install ───────────────────────────────────────────────────────────────────
 install(TARGETS gladius-mod-tool DESTINATION bin)
 install(FILES "${CMAKE_SOURCE_DIR}/resources/gladiushashes.json" DESTINATION bin)
+install(FILES "${CMAKE_SOURCE_DIR}/resources/schoolbuilder_vanilla.json" DESTINATION bin/resources)
 if(XISO_TARGET)
     install(TARGETS ${XISO_TARGET} DESTINATION bin)
 endif()

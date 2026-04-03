@@ -87,10 +87,13 @@ SchoolBuilderTab::SchoolBuilderTab(QWidget *parent)
     schoolGroup->addButton(m_ursulaRadio);
     connect(m_valensRadio, &QRadioButton::toggled, this, &SchoolBuilderTab::onSchoolChanged);
 
-    m_generateJsonBtn = new QPushButton("Generate JSON from TOK files…", this);
+    m_generateJsonBtn = new QPushButton("Regenerate data from BEC…", this);
     m_generateJsonBtn->setToolTip(
-        "Parse classdefs.tok, items.tok, and skills.tok from an unpacked vanilla BEC\n"
-        "and save the result as resources/schoolbuilder_vanilla.json.");
+        "Rebuild the School Builder's class, item, and skill tables from an unpacked BEC.\n"
+        "Use this if you have modified classdefs.tok, items.tok, or skills.tok and want\n"
+        "the School Builder to reflect those changes.\n\n"
+        "The vanilla data is bundled with the tool; only click this if you are working\n"
+        "with a modded version of the game.");
     connect(m_generateJsonBtn, &QPushButton::clicked, this, &SchoolBuilderTab::onGenerateJson);
 
     m_saveBtn = new QPushButton("Save School File", this);
@@ -391,19 +394,25 @@ void SchoolBuilderTab::onSaveSchool()
 void SchoolBuilderTab::onGenerateJson()
 {
     QDialog dlg(this);
-    dlg.setWindowTitle("Generate schoolbuilder_vanilla.json");
-    dlg.setMinimumWidth(540);
+    dlg.setWindowTitle("Regenerate School Builder data from BEC");
+    dlg.setMinimumWidth(580);
 
     auto *infoLabel = new QLabel(
-        "Select the root directory of an unpacked vanilla BEC.\n"
-        "The tool will read data/config/classdefs.tok, items.tok, and skills.tok\n"
-        "and write resources/schoolbuilder_vanilla.json next to the application.",
+        "<b>Vanilla data is bundled with the tool.</b> Only use this if you have modded "
+        "classdefs.tok, items.tok, or skills.tok and want the School Builder to reflect "
+        "those changes.<br><br>"
+        "Select the root directory of an unpacked BEC (your working_BEC folder). "
+        "The tool will read <tt>data/config/classdefs.tok</tt>, <tt>items.tok</tt>, and "
+        "<tt>skills.tok</tt> and overwrite <tt>resources/schoolbuilder_vanilla.json</tt> "
+        "next to the application.",
         &dlg);
     infoLabel->setWordWrap(true);
+    infoLabel->setTextFormat(Qt::RichText);
 
-    auto *dirEdit  = new QLineEdit(&dlg);
+    // Default to the already-unpacked BEC directory if one is set
+    auto *dirEdit  = new QLineEdit(m_moddedDir, &dlg);
     auto *browseBtn = new QPushButton("Browse…", &dlg);
-    auto *genBtn    = new QPushButton("Generate", &dlg);
+    auto *genBtn    = new QPushButton("Regenerate", &dlg);
     auto *statusLabel = new QLabel(&dlg);
     statusLabel->setWordWrap(true);
 
@@ -422,8 +431,9 @@ void SchoolBuilderTab::onGenerateJson()
     layout->addStretch();
 
     connect(browseBtn, &QPushButton::clicked, [&]() {
+        QString start = dirEdit->text().isEmpty() ? QDir::homePath() : dirEdit->text();
         QString dir = QFileDialog::getExistingDirectory(
-            &dlg, "Select unpacked BEC root directory", dirEdit->text());
+            &dlg, "Select unpacked BEC root directory", start);
         if (!dir.isEmpty()) dirEdit->setText(dir);
     });
 
@@ -472,7 +482,7 @@ void SchoolBuilderTab::onGenerateJson()
         updateHintLabel();
 
         statusLabel->setText(
-            QString("Generated: %1 classes, %2 items, %3 skills\nSaved to: %4")
+            QString("Regenerated: %1 classes, %2 items, %3 skills\nSaved to: %4")
             .arg(m_classes.size()).arg(m_items.size()).arg(m_skills.size())
             .arg(outPath));
         genBtn->setEnabled(false);
@@ -654,9 +664,10 @@ void SchoolBuilderTab::updateHintLabel()
 {
     if (!m_dataLoaded) {
         m_hintLabel->setText(
-            "No vanilla data loaded.\n\n"
-            "Click \"Generate JSON from TOK files…\" and select the root directory of an\n"
-            "unpacked vanilla BEC to create resources/schoolbuilder_vanilla.json.");
+            "Vanilla data file not found (resources/schoolbuilder_vanilla.json).\n\n"
+            "Click \"Regenerate data from BEC…\" and select the root of an unpacked BEC\n"
+            "to rebuild it.");
+
         m_hintLabel->show();
         m_mainWidget->hide();
         m_saveBtn->setEnabled(false);
