@@ -21,8 +21,14 @@
 #include <QTextStream>
 #include <QDir>
 #include <QFileInfo>
+#include <QFileDialog>
+#include <QDialog>
 #include <QMessageBox>
 #include <QSet>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QCoreApplication>
 #include <algorithm>
 
 // ── Local helpers ─────────────────────────────────────────────────────────────
@@ -61,6 +67,11 @@ static QStringList splitQuoted(const QString &s)
     return parts;
 }
 
+static QString vanillaJsonPath()
+{
+    return QCoreApplication::applicationDirPath() + "/resources/schoolbuilder_vanilla.json";
+}
+
 // ── Constructor ───────────────────────────────────────────────────────────────
 
 SchoolBuilderTab::SchoolBuilderTab(QWidget *parent)
@@ -75,6 +86,12 @@ SchoolBuilderTab::SchoolBuilderTab(QWidget *parent)
     schoolGroup->addButton(m_valensRadio);
     schoolGroup->addButton(m_ursulaRadio);
     connect(m_valensRadio, &QRadioButton::toggled, this, &SchoolBuilderTab::onSchoolChanged);
+
+    m_generateJsonBtn = new QPushButton("Generate JSON from TOK files…", this);
+    m_generateJsonBtn->setToolTip(
+        "Parse classdefs.tok, items.tok, and skills.tok from an unpacked vanilla BEC\n"
+        "and save the result as resources/schoolbuilder_vanilla.json.");
+    connect(m_generateJsonBtn, &QPushButton::clicked, this, &SchoolBuilderTab::onGenerateJson);
 
     m_saveBtn = new QPushButton("Save School File", this);
     m_saveBtn->setEnabled(false);
@@ -98,12 +115,12 @@ SchoolBuilderTab::SchoolBuilderTab(QWidget *parent)
     topBar->addStretch();
     topBar->addWidget(m_bypassCheckbox);
     topBar->addSpacing(12);
+    topBar->addWidget(m_generateJsonBtn);
+    topBar->addSpacing(8);
     topBar->addWidget(m_saveBtn);
 
     // ── Hint label ────────────────────────────────────────────────────────────
-    m_hintLabel = new QLabel(
-        "Unpack a vanilla ISO first.\n"
-        "The School Builder will be available once the working_BEC is populated.", this);
+    m_hintLabel = new QLabel(this);
     m_hintLabel->setAlignment(Qt::AlignCenter);
     m_hintLabel->setWordWrap(true);
 
@@ -223,6 +240,10 @@ SchoolBuilderTab::SchoolBuilderTab(QWidget *parent)
     layout->addLayout(topBar);
     layout->addWidget(m_hintLabel, 1);
     layout->addWidget(m_mainWidget, 1);
+
+    // ── Try to load bundled JSON at startup ───────────────────────────────────
+    tryLoadBundledJson();
+    updateHintLabel();
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -231,33 +252,10 @@ void SchoolBuilderTab::setRootPath(const QString &moddedDir, const QString &)
 {
     m_moddedDir = moddedDir;
 
-    QString cfgDir    = resolvePath(moddedDir, "data", "config");
-    QString classFile = cfgDir + "classdefs.tok";
-
-    if (!QFile::exists(classFile)) {
-        m_hintLabel->setText(
-            "classdefs.tok not found in working_BEC/data/config/.\n"
-            "Complete an unpack first.");
-        m_hintLabel->show();
-        m_mainWidget->hide();
+    if (!m_dataLoaded) {
+        updateHintLabel();
         return;
     }
-
-    m_classes.clear();
-    m_items.clear();
-    m_skills.clear();
-
-    parseClassDefs(classFile);
-    parseItems(cfgDir + "items.tok");
-    parseSkills(cfgDir + "skills.tok");
-
-    // Populate class combo
-    m_classCombo->blockSignals(true);
-    m_classCombo->clear();
-    QStringList names = m_classes.keys();
-    names.sort(Qt::CaseInsensitive);
-    m_classCombo->addItems(names);
-    m_classCombo->blockSignals(false);
 
     loadSchoolFile();
     refreshGladiatorList();
@@ -265,9 +263,7 @@ void SchoolBuilderTab::setRootPath(const QString &moddedDir, const QString &)
     refreshItemCombos();
     refreshSkillList();
 
-    m_hintLabel->hide();
-    m_mainWidget->show();
-    m_saveBtn->setEnabled(true);
+    updateHintLabel();
 }
 
 // ── Private slots ─────────────────────────────────────────────────────────────
@@ -390,6 +386,294 @@ void SchoolBuilderTab::onSaveSchool()
 
     QMessageBox::information(this, "Saved",
         "School file saved:\n" + QFileInfo(path).fileName());
+}
+
+void SchoolBuilderTab::onGenerateJson()
+{
+    QDialog dlg(this);
+    dlg.setWindowTitle("Generate schoolbuilder_vanilla.json");
+    dlg.setMinimumWidth(540);
+
+    auto *infoLabel = new QLabel(
+        "Select the root directory of an unpacked vanilla BEC.\n"
+        "The tool will read data/config/classdefs.tok, items.tok, and skills.tok\n"
+        "and write resources/schoolbuilder_vanilla.json next to the application.",
+        &dlg);
+    infoLabel->setWordWrap(true);
+
+    auto *dirEdit  = new QLineEdit(&dlg);
+    auto *browseBtn = new QPushButton("Browse…", &dlg);
+    auto *genBtn    = new QPushButton("Generate", &dlg);
+    auto *statusLabel = new QLabel(&dlg);
+    statusLabel->setWordWrap(true);
+
+    auto *dirRow = new QHBoxLayout;
+    dirRow->addWidget(new QLabel("BEC directory:", &dlg));
+    dirRow->addWidget(dirEdit, 1);
+    dirRow->addWidget(browseBtn);
+
+    auto *layout = new QVBoxLayout(&dlg);
+    layout->addWidget(infoLabel);
+    layout->addSpacing(8);
+    layout->addLayout(dirRow);
+    layout->addSpacing(4);
+    layout->addWidget(genBtn);
+    layout->addWidget(statusLabel);
+    layout->addStretch();
+
+    connect(browseBtn, &QPushButton::clicked, [&]() {
+        QString dir = QFileDialog::getExistingDirectory(
+            &dlg, "Select unpacked BEC root directory", dirEdit->text());
+        if (!dir.isEmpty()) dirEdit->setText(dir);
+    });
+
+    connect(genBtn, &QPushButton::clicked, [&]() {
+        QString becDir = dirEdit->text().trimmed();
+        if (becDir.isEmpty()) {
+            statusLabel->setText("Please select a directory first.");
+            return;
+        }
+
+        QString cfgDir    = resolvePath(becDir, "data", "config");
+        QString classFile = cfgDir + "classdefs.tok";
+        QString itemsFile = cfgDir + "items.tok";
+        QString skillsFile = cfgDir + "skills.tok";
+
+        if (!QFile::exists(classFile)) {
+            statusLabel->setText("classdefs.tok not found in:\n" + cfgDir
+                + "\n\nMake sure you selected the root of an unpacked BEC.");
+            return;
+        }
+
+        m_classes.clear();
+        m_items.clear();
+        m_skills.clear();
+        parseClassDefs(classFile);
+        parseItems(itemsFile);
+        parseSkills(skillsFile);
+
+        QString outPath = vanillaJsonPath();
+        if (!serializeToJson(outPath)) {
+            statusLabel->setText("Failed to write JSON to:\n" + outPath);
+            return;
+        }
+
+        m_dataLoaded = true;
+        populateClassCombo();
+
+        // If a modded dir is already set, refresh the full UI
+        if (!m_moddedDir.isEmpty()) {
+            loadSchoolFile();
+            refreshGladiatorList();
+            refreshStats();
+            refreshItemCombos();
+            refreshSkillList();
+        }
+        updateHintLabel();
+
+        statusLabel->setText(
+            QString("Generated: %1 classes, %2 items, %3 skills\nSaved to: %4")
+            .arg(m_classes.size()).arg(m_items.size()).arg(m_skills.size())
+            .arg(outPath));
+        genBtn->setEnabled(false);
+    });
+
+    dlg.exec();
+}
+
+// ── JSON persistence ──────────────────────────────────────────────────────────
+
+void SchoolBuilderTab::tryLoadBundledJson()
+{
+    if (loadFromJson(vanillaJsonPath())) {
+        m_dataLoaded = true;
+        populateClassCombo();
+    }
+}
+
+bool SchoolBuilderTab::loadFromJson(const QString &path)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return false;
+
+    QJsonParseError parseErr;
+    QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &parseErr);
+    if (doc.isNull() || !doc.isObject()) return false;
+
+    QJsonObject root = doc.object();
+
+    // Classes
+    m_classes.clear();
+    QJsonObject classesObj = root["classes"].toObject();
+    for (auto it = classesObj.begin(); it != classesObj.end(); ++it) {
+        ClassDef cls;
+        cls.name = it.key();
+        QJsonObject obj = it.value().toObject();
+        cls.skillUseName = obj["skillUseName"].toString();
+
+        for (auto v : obj["levelZeroStats"].toArray())
+            cls.levelZeroStats.append(v.toInt());
+
+        for (auto row : obj["levelStatAwards"].toArray()) {
+            QVector<int> rowVec;
+            for (auto v : row.toArray())
+                rowVec.append(v.toInt());
+            cls.levelStatAwards.append(rowVec);
+        }
+
+        for (auto v : obj["levelUpJpGiven"].toArray())
+            cls.levelUpJpGiven.append(v.toInt());
+
+        for (auto cat : obj["itemCats"].toArray()) {
+            QJsonObject catObj = cat.toObject();
+            ItemCatEntry entry;
+            entry.slot     = catObj["slot"].toString();
+            entry.subtype  = catObj["subtype"].toString();
+            entry.category = catObj["category"].toString();
+            cls.itemCats.append(entry);
+        }
+
+        m_classes[cls.name] = cls;
+    }
+
+    // Items
+    m_items.clear();
+    for (auto item : root["items"].toArray()) {
+        QJsonObject obj = item.toObject();
+        ItemDef def;
+        def.name     = obj["name"].toString();
+        def.type     = obj["type"].toString();
+        def.subtype  = obj["subtype"].toString();
+        def.category = obj["category"].toString();
+        def.minLevel = obj["minLevel"].toInt(1);
+        m_items.append(def);
+    }
+
+    // Skills
+    m_skills.clear();
+    for (auto skill : root["skills"].toArray()) {
+        QJsonObject obj = skill.toObject();
+        SkillDef def;
+        def.name       = obj["name"].toString();
+        def.useClass   = obj["useClass"].toString();
+        def.skillLevel = obj["skillLevel"].toInt();
+        def.jpCost     = obj["jpCost"].toInt();
+        m_skills.append(def);
+    }
+
+    return !m_classes.isEmpty();
+}
+
+bool SchoolBuilderTab::serializeToJson(const QString &path) const
+{
+    QJsonObject root;
+    root["version"] = 1;
+
+    // Classes
+    QJsonObject classesObj;
+    for (auto it = m_classes.begin(); it != m_classes.end(); ++it) {
+        const ClassDef &cls = it.value();
+        QJsonObject obj;
+        obj["skillUseName"] = cls.skillUseName;
+
+        QJsonArray lzs;
+        for (int v : cls.levelZeroStats) lzs.append(v);
+        obj["levelZeroStats"] = lzs;
+
+        QJsonArray lsa;
+        for (const QVector<int> &row : cls.levelStatAwards) {
+            QJsonArray rowArr;
+            for (int v : row) rowArr.append(v);
+            lsa.append(rowArr);
+        }
+        obj["levelStatAwards"] = lsa;
+
+        QJsonArray lpj;
+        for (int v : cls.levelUpJpGiven) lpj.append(v);
+        obj["levelUpJpGiven"] = lpj;
+
+        QJsonArray cats;
+        for (const ItemCatEntry &cat : cls.itemCats) {
+            QJsonObject catObj;
+            catObj["slot"]     = cat.slot;
+            catObj["subtype"]  = cat.subtype;
+            catObj["category"] = cat.category;
+            cats.append(catObj);
+        }
+        obj["itemCats"] = cats;
+
+        classesObj[cls.name] = obj;
+    }
+    root["classes"] = classesObj;
+
+    // Items
+    QJsonArray itemsArr;
+    for (const ItemDef &item : m_items) {
+        QJsonObject obj;
+        obj["name"]     = item.name;
+        obj["type"]     = item.type;
+        obj["subtype"]  = item.subtype;
+        obj["category"] = item.category;
+        obj["minLevel"] = item.minLevel;
+        itemsArr.append(obj);
+    }
+    root["items"] = itemsArr;
+
+    // Skills
+    QJsonArray skillsArr;
+    for (const SkillDef &sk : m_skills) {
+        QJsonObject obj;
+        obj["name"]       = sk.name;
+        obj["useClass"]   = sk.useClass;
+        obj["skillLevel"] = sk.skillLevel;
+        obj["jpCost"]     = sk.jpCost;
+        skillsArr.append(obj);
+    }
+    root["skills"] = skillsArr;
+
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly)) return false;
+    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    return true;
+}
+
+// ── UI helpers ────────────────────────────────────────────────────────────────
+
+void SchoolBuilderTab::populateClassCombo()
+{
+    m_classCombo->blockSignals(true);
+    m_classCombo->clear();
+    QStringList names = m_classes.keys();
+    names.sort(Qt::CaseInsensitive);
+    m_classCombo->addItems(names);
+    m_classCombo->blockSignals(false);
+}
+
+void SchoolBuilderTab::updateHintLabel()
+{
+    if (!m_dataLoaded) {
+        m_hintLabel->setText(
+            "No vanilla data loaded.\n\n"
+            "Click \"Generate JSON from TOK files…\" and select the root directory of an\n"
+            "unpacked vanilla BEC to create resources/schoolbuilder_vanilla.json.");
+        m_hintLabel->show();
+        m_mainWidget->hide();
+        m_saveBtn->setEnabled(false);
+        return;
+    }
+    if (m_moddedDir.isEmpty()) {
+        m_hintLabel->setText(
+            "Unpack a vanilla ISO first.\n"
+            "The School Builder will be available once the working_BEC is populated.");
+        m_hintLabel->show();
+        m_mainWidget->hide();
+        m_saveBtn->setEnabled(false);
+        return;
+    }
+    m_hintLabel->hide();
+    m_mainWidget->show();
+    m_saveBtn->setEnabled(true);
 }
 
 // ── Parsers ───────────────────────────────────────────────────────────────────
@@ -685,7 +969,6 @@ void SchoolBuilderTab::refreshItemCombos()
 void SchoolBuilderTab::refreshSkillList()
 {
     QString className = m_classCombo->currentText();
-    int level = m_levelSpin->value();
     m_skillList->clear();
 
     if (!m_classes.contains(className)) return;

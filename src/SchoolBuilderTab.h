@@ -79,10 +79,12 @@ private slots:
     void editSelectedGladiator();
     void removeSelectedGladiator();
     void onBypassToggled(bool checked);
+    void onGenerateJson();
 
 private:
     // ── State ─────────────────────────────────────────────────────────────────
     QString                  m_moddedDir;
+    bool                     m_dataLoaded = false;
     QMap<QString, ClassDef>  m_classes;
     QVector<ItemDef>         m_items;
     QVector<SkillDef>        m_skills;
@@ -93,6 +95,7 @@ private:
     // ── UI ────────────────────────────────────────────────────────────────────
     QRadioButton *m_valensRadio;
     QRadioButton *m_ursulaRadio;
+    QPushButton  *m_generateJsonBtn;
     QPushButton  *m_saveBtn;
     QCheckBox    *m_bypassCheckbox;
     QLabel       *m_hintLabel;
@@ -119,11 +122,22 @@ private:
     QPushButton  *m_cancelEditBtn;
     QGroupBox    *m_rightGroup;
 
-    // ── Parsers ───────────────────────────────────────────────────────────────
+    // ── JSON persistence ──────────────────────────────────────────────────────
+    void tryLoadBundledJson();
+    bool loadFromJson     (const QString &path);
+    bool serializeToJson  (const QString &path) const;
+
+    // ── TOK parsers (used during JSON generation) ─────────────────────────────
     void parseClassDefs(const QString &path);
     void parseItems    (const QString &path);
     void parseSkills   (const QString &path);
+
+    // ── School file I/O ───────────────────────────────────────────────────────
     void loadSchoolFile();
+
+    // ── UI helpers ────────────────────────────────────────────────────────────
+    void populateClassCombo();
+    void updateHintLabel();
 
     // ── UI refresh ────────────────────────────────────────────────────────────
     void refreshGladiatorList();
