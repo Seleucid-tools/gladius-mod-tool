@@ -67,9 +67,10 @@ static QStringList splitQuoted(const QString &s)
     return parts;
 }
 
-static QString vanillaJsonPath()
+// static
+QString SchoolBuilderTab::resourcesDir()
 {
-    return QCoreApplication::applicationDirPath() + "/resources/schoolbuilder_vanilla.json";
+    return QCoreApplication::applicationDirPath() + "/resources/";
 }
 
 // ── Constructor ───────────────────────────────────────────────────────────────
@@ -87,13 +88,22 @@ SchoolBuilderTab::SchoolBuilderTab(QWidget *parent)
     schoolGroup->addButton(m_ursulaRadio);
     connect(m_valensRadio, &QRadioButton::toggled, this, &SchoolBuilderTab::onSchoolChanged);
 
-    m_generateJsonBtn = new QPushButton("Regenerate data from BEC…", this);
+    m_loadDataBtn = new QPushButton("Load data…", this);
+    m_loadDataBtn->setToolTip(
+        "Load class, item, and skill tables from a previously saved JSON file.\n"
+        "Use this when maintaining multiple modded working directories, each with\n"
+        "its own schoolbuilder JSON generated from that mod's BEC.");
+    connect(m_loadDataBtn, &QPushButton::clicked, this, &SchoolBuilderTab::onLoadData);
+
+    m_dataSourceLabel = new QLabel(this);
+    m_dataSourceLabel->setStyleSheet("color: gray; font-style: italic;");
+
+    m_generateJsonBtn = new QPushButton("Generate data JSON…", this);
     m_generateJsonBtn->setToolTip(
-        "Rebuild the School Builder's class, item, and skill tables from an unpacked BEC.\n"
-        "Use this if you have modified classdefs.tok, items.tok, or skills.tok and want\n"
-        "the School Builder to reflect those changes.\n\n"
-        "The vanilla data is bundled with the tool; only click this if you are working\n"
-        "with a modded version of the game.");
+        "Parse classdefs.tok, items.tok, and skills.tok from an unpacked BEC and save\n"
+        "the result as a named JSON file in the resources/ folder.\n\n"
+        "The vanilla data is already bundled with the tool. Use this only if you are\n"
+        "working with a modded version of the game and want a separate data file for it.");
     connect(m_generateJsonBtn, &QPushButton::clicked, this, &SchoolBuilderTab::onGenerateJson);
 
     m_saveBtn = new QPushButton("Save School File", this);
@@ -111,6 +121,7 @@ SchoolBuilderTab::SchoolBuilderTab(QWidget *parent)
     connect(m_bypassCheckbox, &QCheckBox::toggled,
             this, &SchoolBuilderTab::onBypassToggled);
 
+    // Row 1: school selector + bypass + save
     auto *topBar = new QHBoxLayout;
     topBar->addWidget(new QLabel("School:"));
     topBar->addWidget(m_valensRadio);
@@ -118,9 +129,15 @@ SchoolBuilderTab::SchoolBuilderTab(QWidget *parent)
     topBar->addStretch();
     topBar->addWidget(m_bypassCheckbox);
     topBar->addSpacing(12);
-    topBar->addWidget(m_generateJsonBtn);
-    topBar->addSpacing(8);
     topBar->addWidget(m_saveBtn);
+
+    // Row 2: active data source + load + generate
+    auto *dataBar = new QHBoxLayout;
+    dataBar->addWidget(new QLabel("Data:"));
+    dataBar->addWidget(m_dataSourceLabel, 1);
+    dataBar->addWidget(m_loadDataBtn);
+    dataBar->addSpacing(4);
+    dataBar->addWidget(m_generateJsonBtn);
 
     // ── Hint label ────────────────────────────────────────────────────────────
     m_hintLabel = new QLabel(this);
@@ -241,6 +258,7 @@ SchoolBuilderTab::SchoolBuilderTab(QWidget *parent)
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(6, 6, 6, 6);
     layout->addLayout(topBar);
+    layout->addLayout(dataBar);
     layout->addWidget(m_hintLabel, 1);
     layout->addWidget(m_mainWidget, 1);
 
@@ -391,28 +409,60 @@ void SchoolBuilderTab::onSaveSchool()
         "School file saved:\n" + QFileInfo(path).fileName());
 }
 
+void SchoolBuilderTab::onLoadData()
+{
+    QString start = m_activeJsonPath.isEmpty() ? resourcesDir() : m_activeJsonPath;
+    QString path = QFileDialog::getOpenFileName(
+        this, "Load School Builder data file", start,
+        "School Builder data (*.json);;All files (*)");
+    if (path.isEmpty()) return;
+
+    if (!loadFromJson(path)) {
+        QMessageBox::critical(this, "Load failed",
+            "Could not read a valid School Builder data file from:\n" + path);
+        return;
+    }
+    applyLoadedData(path);
+
+    if (!m_moddedDir.isEmpty()) {
+        loadSchoolFile();
+        refreshGladiatorList();
+        refreshStats();
+        refreshItemCombos();
+        refreshSkillList();
+    }
+    updateHintLabel();
+}
+
 void SchoolBuilderTab::onGenerateJson()
 {
     QDialog dlg(this);
-    dlg.setWindowTitle("Regenerate School Builder data from BEC");
+    dlg.setWindowTitle("Generate School Builder data from BEC");
     dlg.setMinimumWidth(580);
 
     auto *infoLabel = new QLabel(
-        "<b>Vanilla data is bundled with the tool.</b> Only use this if you have modded "
-        "classdefs.tok, items.tok, or skills.tok and want the School Builder to reflect "
-        "those changes.<br><br>"
-        "Select the root directory of an unpacked BEC (your working_BEC folder). "
-        "The tool will read <tt>data/config/classdefs.tok</tt>, <tt>items.tok</tt>, and "
-        "<tt>skills.tok</tt> and overwrite <tt>resources/schoolbuilder_vanilla.json</tt> "
-        "next to the application.",
+        "<b>Vanilla data is bundled with the tool.</b> Only use this when working with "
+        "a mod that changes classdefs.tok, items.tok, or skills.tok and you want the "
+        "School Builder to reflect those changes.<br><br>"
+        "Select the root of an unpacked BEC (e.g. your working_BEC folder) and give "
+        "the output file a descriptive name. The file is saved to the <tt>resources/</tt> "
+        "folder and can be reloaded later with <b>Load data…</b>.",
         &dlg);
     infoLabel->setWordWrap(true);
     infoLabel->setTextFormat(Qt::RichText);
 
-    // Default to the already-unpacked BEC directory if one is set
-    auto *dirEdit  = new QLineEdit(m_moddedDir, &dlg);
+    // BEC source directory — default to working_BEC if set
+    auto *dirEdit   = new QLineEdit(m_moddedDir, &dlg);
     auto *browseBtn = new QPushButton("Browse…", &dlg);
-    auto *genBtn    = new QPushButton("Regenerate", &dlg);
+
+    // Output filename — default to a unique name based on the BEC folder name
+    QString defaultName = m_moddedDir.isEmpty()
+        ? "schoolbuilder_vanilla.json"
+        : QFileInfo(m_moddedDir).fileName().replace(' ', '_') + "_schoolbuilder.json";
+    auto *outNameEdit = new QLineEdit(defaultName, &dlg);
+    outNameEdit->setPlaceholderText("e.g. my_mod_schoolbuilder.json");
+
+    auto *genBtn      = new QPushButton("Generate", &dlg);
     auto *statusLabel = new QLabel(&dlg);
     statusLabel->setWordWrap(true);
 
@@ -421,10 +471,17 @@ void SchoolBuilderTab::onGenerateJson()
     dirRow->addWidget(dirEdit, 1);
     dirRow->addWidget(browseBtn);
 
+    auto *outRow = new QHBoxLayout;
+    outRow->addWidget(new QLabel("Output filename:", &dlg));
+    outRow->addWidget(outNameEdit, 1);
+    outRow->addWidget(new QLabel("(saved to resources/)", &dlg));
+
     auto *layout = new QVBoxLayout(&dlg);
     layout->addWidget(infoLabel);
     layout->addSpacing(8);
     layout->addLayout(dirRow);
+    layout->addSpacing(4);
+    layout->addLayout(outRow);
     layout->addSpacing(4);
     layout->addWidget(genBtn);
     layout->addWidget(statusLabel);
@@ -434,15 +491,31 @@ void SchoolBuilderTab::onGenerateJson()
         QString start = dirEdit->text().isEmpty() ? QDir::homePath() : dirEdit->text();
         QString dir = QFileDialog::getExistingDirectory(
             &dlg, "Select unpacked BEC root directory", start);
-        if (!dir.isEmpty()) dirEdit->setText(dir);
+        if (!dir.isEmpty()) {
+            dirEdit->setText(dir);
+            // Auto-suggest an output name from the folder if the user hasn't typed one
+            if (outNameEdit->text() == defaultName || outNameEdit->text().isEmpty()) {
+                QString suggested = QFileInfo(dir).fileName().replace(' ', '_')
+                                    + "_schoolbuilder.json";
+                outNameEdit->setText(suggested);
+            }
+        }
     });
 
     connect(genBtn, &QPushButton::clicked, [&]() {
-        QString becDir = dirEdit->text().trimmed();
+        QString becDir   = dirEdit->text().trimmed();
+        QString outName  = outNameEdit->text().trimmed();
+
         if (becDir.isEmpty()) {
-            statusLabel->setText("Please select a directory first.");
+            statusLabel->setText("Please select a BEC directory first.");
             return;
         }
+        if (outName.isEmpty()) {
+            statusLabel->setText("Please enter an output filename.");
+            return;
+        }
+        if (!outName.endsWith(".json", Qt::CaseInsensitive))
+            outName += ".json";
 
         QString cfgDir    = resolvePath(becDir, "data", "config");
         QString classFile = cfgDir + "classdefs.tok";
@@ -462,14 +535,13 @@ void SchoolBuilderTab::onGenerateJson()
         parseItems(itemsFile);
         parseSkills(skillsFile);
 
-        QString outPath = vanillaJsonPath();
+        QString outPath = resourcesDir() + outName;
         if (!serializeToJson(outPath)) {
             statusLabel->setText("Failed to write JSON to:\n" + outPath);
             return;
         }
 
-        m_dataLoaded = true;
-        populateClassCombo();
+        applyLoadedData(outPath);
 
         // If a modded dir is already set, refresh the full UI
         if (!m_moddedDir.isEmpty()) {
@@ -482,7 +554,7 @@ void SchoolBuilderTab::onGenerateJson()
         updateHintLabel();
 
         statusLabel->setText(
-            QString("Regenerated: %1 classes, %2 items, %3 skills\nSaved to: %4")
+            QString("Generated: %1 classes, %2 items, %3 skills\nSaved to: %4")
             .arg(m_classes.size()).arg(m_items.size()).arg(m_skills.size())
             .arg(outPath));
         genBtn->setEnabled(false);
@@ -495,10 +567,18 @@ void SchoolBuilderTab::onGenerateJson()
 
 void SchoolBuilderTab::tryLoadBundledJson()
 {
-    if (loadFromJson(vanillaJsonPath())) {
-        m_dataLoaded = true;
-        populateClassCombo();
-    }
+    QString path = resourcesDir() + "schoolbuilder_vanilla.json";
+    if (loadFromJson(path))
+        applyLoadedData(path);
+}
+
+void SchoolBuilderTab::applyLoadedData(const QString &path)
+{
+    m_dataLoaded = true;
+    m_activeJsonPath = path;
+    m_dataSourceLabel->setText(QFileInfo(path).fileName());
+    m_dataSourceLabel->setToolTip(path);
+    populateClassCombo();
 }
 
 bool SchoolBuilderTab::loadFromJson(const QString &path)
@@ -1093,15 +1173,14 @@ void SchoolBuilderTab::onGladiatorSelectionChanged(int row)
         return;
     }
     bool required = m_gladiators[row].isRequired;
-    m_editBtn->setEnabled(!required);
-    m_removeBtn->setEnabled(!required);
+    m_editBtn->setEnabled(true);           // required gladiators can be edited
+    m_removeBtn->setEnabled(!required);    // but not removed
 }
 
 void SchoolBuilderTab::editSelectedGladiator()
 {
     int row = m_gladiatorList->currentRow();
     if (row < 0 || row >= m_gladiators.size()) return;
-    if (m_gladiators[row].isRequired) return;
     loadGladiatorIntoForm(row);
 }
 

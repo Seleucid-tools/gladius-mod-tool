@@ -79,11 +79,13 @@ private slots:
     void editSelectedGladiator();
     void removeSelectedGladiator();
     void onBypassToggled(bool checked);
+    void onLoadData();
     void onGenerateJson();
 
 private:
     // ── State ─────────────────────────────────────────────────────────────────
     QString                  m_moddedDir;
+    QString                  m_activeJsonPath;
     bool                     m_dataLoaded = false;
     QMap<QString, ClassDef>  m_classes;
     QVector<ItemDef>         m_items;
@@ -95,6 +97,8 @@ private:
     // ── UI ────────────────────────────────────────────────────────────────────
     QRadioButton *m_valensRadio;
     QRadioButton *m_ursulaRadio;
+    QPushButton  *m_loadDataBtn;
+    QLabel       *m_dataSourceLabel;
     QPushButton  *m_generateJsonBtn;
     QPushButton  *m_saveBtn;
     QCheckBox    *m_bypassCheckbox;
@@ -126,6 +130,7 @@ private:
     void tryLoadBundledJson();
     bool loadFromJson     (const QString &path);
     bool serializeToJson  (const QString &path) const;
+    void applyLoadedData  (const QString &path);
 
     // ── TOK parsers (used during JSON generation) ─────────────────────────────
     void parseClassDefs(const QString &path);
@@ -160,6 +165,7 @@ private:
     void clearEditMode();
 
     // ── File helpers ──────────────────────────────────────────────────────────
+    static QString resourcesDir();
     QString     resolvePath    (const QString &base, const QString &sub1,
                                 const QString &sub2 = {}) const;
     QString     schoolFileName () const;
