@@ -380,11 +380,10 @@ void SchoolBuilderTab::addGladiator()
     if (isBypassMode()) {
         g.coreStats = parseIntList(m_statsEdit->text());
         while (g.coreStats.size() < 6) g.coreStats.append(0);
-        g.jobPoints = m_jpSpin->value();
     } else {
         g.coreStats = computeStats(cls, level);
-        g.jobPoints = computeJP(cls, level);
     }
+    g.jobPoints = m_jpSpin->value(); // already deducted for auto-checked skills in normal mode
 
     auto comboVal = [](QComboBox *c) -> QString {
         QString v = c->currentText();
@@ -425,6 +424,7 @@ void SchoolBuilderTab::onBypassToggled(bool checked)
         : "QLineEdit[readOnly=\"true\"] { background: palette(window); }");
     m_jpSpin->setEnabled(checked);
 
+    populateClassCombo(); // recruitable filter changes with bypass mode
     if (!checked) {
         refreshStats();
         refreshItemCombos();
@@ -871,10 +871,34 @@ bool SchoolBuilderTab::serializeToJson(const QString &path) const
 
 void SchoolBuilderTab::populateClassCombo()
 {
+    // Classes recruitable in vanilla Gladius (from gladiuscommunity.com/recruits)
+    static const QSet<QString> kVanillaRecruitable = {
+        "Amazon",      "Archer",       "ArcherF",
+        "BanditA",     "BanditAF",     "BanditB",      "BanditBF",
+        "Barbarian",   "BarbarianF",   "Bear",
+        "Berserker",   "BerserkerF",   "Cat",
+        "Centurion",   "CenturionF",   "ChannelerImp",
+        "Cyclops",     "Dervish",      "DervishF",
+        "Gungnir",     "GungnirF",     "Legionnaire",  "LegionnaireF",
+        "Mongrel",     "MongrelShaman","Murmillo",     "MurmilloF",
+        "Ogre",        "Peltast",      "PeltastF",
+        "SamniteExp",  "SamniteExpF",  "SamniteImp",   "SamniteImpF",
+        "SamniteSte",  "SamniteSteF",  "Satyr",        "Scarab",
+        "Scorpion",    "SecutorImp",   "SecutorImpF",  "SecutorSte",  "SecutorSteF",
+        "Summoner",    "UndeadCasterA","Wolf",          "Yeti"
+    };
+
     m_classCombo->blockSignals(true);
     m_classCombo->clear();
     QStringList names = m_classes.keys();
     names.sort(Qt::CaseInsensitive);
+    if (!isBypassMode()) {
+        QStringList filtered;
+        for (const QString &n : names)
+            if (kVanillaRecruitable.contains(n))
+                filtered.append(n);
+        names = filtered;
+    }
     m_classCombo->addItems(names);
     m_classCombo->blockSignals(false);
 }
@@ -1346,6 +1370,22 @@ void SchoolBuilderTab::refreshSkillList()
             tip += QString("   (learned at level %1)").arg(skillMinLevel[sk.name]);
         item->setToolTip(tip);
     }
+
+    // Deduct JP cost of auto-checked skills from total earned JP
+    if (!isBypassMode() && m_classes.contains(className)) {
+        int totalJP = computeJP(m_classes[className], level);
+        int spentJP = 0;
+        // Build name→jpCost map for checked skills
+        QMap<QString, int> skillCost;
+        for (const SkillDef &sk : m_skills)
+            skillCost[sk.name] = sk.jpCost;
+        for (int i = 0; i < m_skillList->count(); ++i) {
+            auto *it = m_skillList->item(i);
+            if (it->checkState() == Qt::Checked)
+                spentJP += skillCost.value(it->text(), 0);
+        }
+        m_jpSpin->setValue(qMax(0, totalJP - spentJP));
+    }
 }
 
 // ── Computation ───────────────────────────────────────────────────────────────
@@ -1487,7 +1527,6 @@ void SchoolBuilderTab::loadGladiatorIntoForm(int index)
     if (st.size() >= 6)
         m_statsEdit->setText(QString("%1, %2, %3, %4, %5, %6")
             .arg(st[0]).arg(st[1]).arg(st[2]).arg(st[3]).arg(st[4]).arg(st[5]));
-    m_jpSpin->setValue(g.jobPoints);
 
     refreshItemCombos();
     refreshSkillList();
@@ -1501,12 +1540,13 @@ void SchoolBuilderTab::loadGladiatorIntoForm(int index)
         combos[s]->setCurrentIndex(qMax(0, idx));
     }
 
-    // Restore saved skill checks
+    // Restore saved skill checks and JP (must come after refreshSkillList)
     QSet<QString> checked(g.skills.begin(), g.skills.end());
     for (int i = 0; i < m_skillList->count(); ++i) {
         auto *item = m_skillList->item(i);
         item->setCheckState(checked.contains(item->text()) ? Qt::Checked : Qt::Unchecked);
     }
+    m_jpSpin->setValue(g.jobPoints);
 
     m_rightGroup->setTitle("Edit Gladiator");
     m_addBtn->setText("Update Gladiator");
