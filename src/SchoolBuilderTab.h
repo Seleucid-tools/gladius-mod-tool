@@ -13,6 +13,7 @@ class QListWidget;
 class QLabel;
 class QPushButton;
 class QRadioButton;
+class QButtonGroup;
 
 // ── Data structures ────────────────────────────────────────────────────────────
 
@@ -46,9 +47,33 @@ struct SkillDef {
     int     jpCost     = 0;
 };
 
+// ── Unit-set data (from units/skillsets.txt, itemsets.txt, statsets.txt) ──────
+
+struct SkillSetEntry {
+    int     minLevel = 0;
+    int     maxLevel = 30;
+    QString name;
+};
+
+struct ItemSetEntry {
+    int     minLevel = 1;
+    int     maxLevel = 99;
+    QString name;
+    QString slot;   // weapon | armor | shield | helmet | accessory
+};
+
+struct ClassAffinityEntry {
+    int skillSet = -1;
+    int statSet  = -1;
+    int itemSet  = -1;
+};
+
+// ── School entry ──────────────────────────────────────────────────────────────
+
 struct GladiatorEntry {
     QString          name;
     QString          className;
+    QString          affinity   = "None";  // None | Air | Earth | Fire | Water
     int              level      = 1;
     int              experience = 0;
     int              jobPoints  = 5;
@@ -73,6 +98,7 @@ private slots:
     void onSchoolChanged();
     void onClassChanged(int index);
     void onLevelChanged(int value);
+    void onAffinityChanged();
     void addGladiator();
     void onSaveSchool();
     void onGladiatorSelectionChanged(int row);
@@ -87,9 +113,19 @@ private:
     QString                  m_moddedDir;
     QString                  m_activeJsonPath;
     bool                     m_dataLoaded = false;
+
+    // Core class/item/skill tables (from classdefs.tok, items.tok, skills.tok)
     QMap<QString, ClassDef>  m_classes;
     QVector<ItemDef>         m_items;
     QVector<SkillDef>        m_skills;
+
+    // Unit-set tables (from units/skillsets.txt etc.) — optional; empty = not available
+    QMap<int, QVector<SkillSetEntry>>          m_skillSets;
+    QMap<int, QVector<ItemSetEntry>>           m_itemSets;
+    QMap<int, QMap<int, QVector<int>>>         m_statSets; // setId → level → stats
+    QMap<QString, QMap<QString, ClassAffinityEntry>> m_classAffinityMap;
+
+    // School state
     QString                  m_schoolHeader;
     QVector<GladiatorEntry>  m_gladiators;
     int                      m_editingIndex = -1;
@@ -114,6 +150,8 @@ private:
     QLineEdit    *m_nameEdit;
     QComboBox    *m_classCombo;
     QSpinBox     *m_levelSpin;
+    QRadioButton *m_affinityRadios[5]; // None / Air / Earth / Fire / Water
+    QButtonGroup *m_affinityGroup;
     QLineEdit    *m_statsEdit;   // read-only normally; editable in bypass mode
     QSpinBox     *m_jpSpin;      // disabled normally; enabled in bypass mode
     QComboBox    *m_weaponCombo;
@@ -132,10 +170,14 @@ private:
     bool serializeToJson  (const QString &path) const;
     void applyLoadedData  (const QString &path);
 
-    // ── TOK parsers (used during JSON generation) ─────────────────────────────
+    // ── TOK / TXT parsers ─────────────────────────────────────────────────────
     void parseClassDefs(const QString &path);
     void parseItems    (const QString &path);
     void parseSkills   (const QString &path);
+    void parseSkillSets(const QString &path);
+    void parseItemSets (const QString &path);
+    void parseStatSets (const QString &path);
+    void parseGladiators(const QString &path);
 
     // ── School file I/O ───────────────────────────────────────────────────────
     void loadSchoolFile();
@@ -159,6 +201,8 @@ private:
     bool itemMatchesCat (const ItemDef &item, const ItemCatEntry &cat) const;
     bool itemEquippable (int itemMinLevel, int gladiatorLevel) const;
     bool isBypassMode   () const;
+    QString currentAffinity() const;
+    static QString inferAffinity(const QVector<QString> &skills);
 
     // ── Edit helpers ──────────────────────────────────────────────────────────
     void loadGladiatorIntoForm(int index);
